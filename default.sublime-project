@@ -1,6 +1,6 @@
 {
-	"build_systems":
-	[
+    "build_systems":
+    [
         {
             "cmd":
             [
@@ -18,11 +18,14 @@
             "syntax": "Packages/Makefile/Make Output.sublime-syntax",
             "working_dir": "${project_path}"
         }
-	],
-	"folders":
-	[
-		{
-			"path": "."
-		}
-	]
+    ],
+    "folders":
+    [
+        {
+            "path": "src"
+        },
+        {
+            "path": "third_party"
+        },
+    ]
 }

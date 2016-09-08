@@ -3,8 +3,14 @@ System Trace Visualizer
 
 ## Setup And Build
 
-Right now Linux is supported and GLFW3 and OpenGL are required.
+Right now Linux is supported and libsdl2 and OpenGL are required.
 
+On ubuntu you should be able to setup the pre-reqs with:
+```
+apt-get install libsdl2-dev
+```
+
+And check out and build like this:
 ```
 git clone https://github.com/swetland/traceviz.git
 cd traceviz
