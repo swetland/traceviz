@@ -9,7 +9,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <magenta/ktrace.h>
+#include "ktrace.h"
+
+#include "traceviz.h"
 
 // USE_NS 1 means pass time as 000.000 (microseconds) to traceview
 //          internal timestamps in nanoseconds
@@ -39,9 +41,50 @@ static inline uint32_t fnv1a_tiny(uint32_t n, uint32_t bits) {
     return ((hash >> bits) ^ hash) & ((1 << bits) - 1);
 }
 
+group_t* group_list;
+group_t* group_last;
+group_t* group_kernel;
+
+group_t* group_create(void) {
+    group_t* g = calloc(1, sizeof(group_t));
+    if (group_last) {
+        group_last->next = g;
+    } else {
+        group_list = g;
+    }
+    group_last = g;
+    return g;
+}
+
+track_t* track_create(group_t* group) {
+    track_t* t = calloc(1, sizeof(track_t));
+    t->tasksize = 512;
+    t->taskcount = 1;
+    t->task = malloc(sizeof(taskstate_t) * t->tasksize);
+    t->task[0].ts = 0;
+    t->task[0].state = TS_NONE;
+    if (group->last) {
+        group->last->next = t;
+    } else {
+        group->first = t;
+    }
+    group->last = t;
+    return t;
+}
+
+void track_append(track_t* t, uint64_t ts, uint32_t state) {
+    if (t->taskcount == t->tasksize) {
+        t->tasksize *= 2;
+        t->task = realloc(t->task, sizeof(taskstate_t) * t->tasksize);
+    }
+    t->task[t->taskcount].ts = ts;
+    t->task[t->taskcount++].state = state;
+}
+
 typedef struct objinfo objinfo_t;
 struct objinfo {
     objinfo_t* next;
+    void* track;
     uint32_t id;
     uint32_t kind;
     uint32_t flags;
@@ -196,6 +239,7 @@ uint32_t thread_to_process(uint32_t id) {
 
 int verbose = 0;
 int json = 0;
+int text = 0;
 int with_kthreads = 0;
 int with_msgpipe_io = 0;
 int with_waiting = 0;
@@ -207,10 +251,10 @@ typedef struct evtinfo {
     uint32_t tid;
 } evt_info_t;
 
-#define trace(fmt...) do { if(!json) printf(fmt); } while (0)
+#define trace(fmt...) do { if(text) printf(fmt); } while (0)
 
 void trace_hdr(evt_info_t* ei, uint32_t tag) {
-    if (json) {
+    if (!text) {
         return;
     }
     switch (tag) {
@@ -396,6 +440,7 @@ void evt_context_switch(evt_info_t* ei, uint32_t newpid, uint32_t newtid,
     if (ei->pid && ei->tid && !is_object(ei->pid, F_INVISIBLE)) {
         objinfo_t* oi = find_object(ei->tid, KTHREAD);
         if (oi) {
+            track_append(oi->track, ei->ts, state);
             // we're going to sleep, record our wake time
             if (oi->last_ts) {
                 json_rec(oi->last_ts, "X", name, "thread",
@@ -412,6 +457,7 @@ void evt_context_switch(evt_info_t* ei, uint32_t newpid, uint32_t newtid,
     if (newpid && newtid && !is_object(newpid, F_INVISIBLE)) {
         objinfo_t* oi = find_object(newtid, KTHREAD);
         if (oi) {
+            track_append(oi->track, ei->ts, THREAD_RUNNING);
             // we just woke up, record our sleep time
             if (oi->last_ts) {
                 json_rec(oi->last_ts, "X", thread_state_msg(oi->last_state), "thread",
@@ -431,6 +477,7 @@ void end_of_trace(objinfo_t* oi, uint64_t ts) {
         if (is_object(oi->extra, F_INVISIBLE)) {
             return;
         }
+        track_append(oi->track, ts, TS_NONE);
         if (oi->flags & F_RUNNING) {
             // simulate context switch away
             json_rec(oi->last_ts, "X", "cpu", "thread",
@@ -479,6 +526,10 @@ void evt_process_start(evt_info_t* ei, uint32_t pid, uint32_t tid) {
     SYSCALL("op", "process_start()", "#pid", pid, "#tid", tid);
 }
 void evt_process_name(uint32_t pid, const char* name, uint32_t index) {
+    objinfo_t* oi = find_object(pid, KPROC);
+    if (oi) {
+        ((track_t*)oi->track)->name = strdup(name);
+    }
     if (is_object(pid, F_INVISIBLE)) {
         return;
     }
@@ -518,6 +569,10 @@ void evt_thread_start(evt_info_t* ei, uint32_t tid) {
 void evt_thread_name(uint32_t pid, uint32_t tid, const char* name) {
     char tmp[128];
     sprintf(tmp, "%s (%u)", name, tid);
+    objinfo_t* oi = find_object(tid, KTHREAD);
+    if (oi) {
+        ((track_t*)oi->track)->name = strdup(tmp);
+    }
     json_obj("ph", "M",
              "name", "thread_name",
              "#pid", pid,
@@ -750,7 +805,7 @@ void dump_stats(stats_t* s) {
 uint32_t visible_pids[MAX_VIS_PIDS];
 uint32_t visible_count;
 
-int main(int argc, char** argv) {
+int ktrace_main(int argc, char** argv) {
     int show_stats = 0;
     stats_t s;
     ktrace_record_t rec;
@@ -896,6 +951,7 @@ int main(int argc, char** argv) {
             s.process_new++;
             trace("PROC_CREATE id=%08x\n", rec.a);
             oi = new_object(rec.a, KPROC, rec.id, 0);
+            oi->track = group_create();
             if (visible_count) {
                 oi->flags |= F_INVISIBLE;
                 for (unsigned n = 0; n < visible_count; n++) {
@@ -920,7 +976,12 @@ int main(int argc, char** argv) {
             trace("THRD_CREATE id=%08x pid=%08x\n", rec.a, rec.b);
             oi = new_object(rec.a, KTHREAD, rec.id, rec.b);
             oi2 = find_object(rec.b, KPROC);
-            if (oi2 && (oi2->flags & F_INVISIBLE)) {
+            if (oi2 == NULL) {
+                oi2 = new_object(rec.b, KPROC, 0, 0);
+                oi2->track = group_create();
+            }
+            oi->track = track_create((group_t*) oi2->track);
+            if (oi2->flags & F_INVISIBLE) {
                 oi->flags |= F_INVISIBLE;
             }
             evt_thread_create(&ei, rec.a, rec.b);
@@ -987,6 +1048,7 @@ int main(int argc, char** argv) {
         s.ts_last = ei.ts;
         for_each_object(end_of_trace, ei.ts);
     }
+    add_groups(group_list);
 
     if (json) {
 #if USE_NS
