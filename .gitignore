@@ -1,0 +1,6 @@
+*.swp
+*~
+*.ini
+*.sublime-workspace
+*.trace
+out
