@@ -1,0 +1,28 @@
+{
+	"build_systems":
+	[
+        {
+            "cmd":
+            [
+                "make"
+            ],
+            "file_regex": "^(..[^:\n]*):([0-9]+):?([0-9]+)?:? (.*)$",
+            "name": "make",
+            "syntax": "Packages/Makefile/Make Output.sublime-syntax",
+            "working_dir": "${project_path}"
+        },
+        {
+            "shell_cmd": "make && ./out/traceviz mouse.trace",
+            "file_regex": "^(..[^:\n]*):([0-9]+):?([0-9]+)?:? (.*)$",
+            "name": "make and run",
+            "syntax": "Packages/Makefile/Make Output.sublime-syntax",
+            "working_dir": "${project_path}"
+        }
+	],
+	"folders":
+	[
+		{
+			"path": "."
+		}
+	]
+}
