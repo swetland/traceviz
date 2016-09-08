@@ -6,9 +6,10 @@
 
 #include <stdint.h>
 #include <assert.h>
-#include <magenta/compiler.h>
 
-__BEGIN_CDECLS
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // clang-format off
 
@@ -85,4 +86,7 @@ static_assert(sizeof(ktrace_record_t) == KTRACE_RECSIZE,
 #define KTRACE_ACTION_STOP     2 // options ignored
 #define KTRACE_ACTION_REWIND   3 // options ignored
 
-__END_CDECLS
+#ifdef __cplusplus
+}
+#endif
+
