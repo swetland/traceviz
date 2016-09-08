@@ -19,3 +19,16 @@ git submodule update
 make
 ```
 
+## Explore a Sample Trace File
+
+Grab it from the samples branch:
+```
+git checkout origin/samples -- mouse.trace
+git rm --cached mouse.trace
+```
+
+Run TraceViz:
+```
+./out/traceviz mouse.trace
+```
+
