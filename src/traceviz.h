@@ -38,7 +38,10 @@ struct group {
     track_t* first;
     track_t* last;
     const char* name;
+    uint32_t flags;
 };
+
+#define GRP_FOLDED 1
 
 struct track {
     track_t* next;

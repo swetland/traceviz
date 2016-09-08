@@ -99,6 +99,14 @@ static int busy = 0;
 static int64_t drag_offset = 0;
 static int64_t tpos = 0; // time at left edge
 
+void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
+    dl->AddTriangleFilled(pos, pos + ImVec2(size.x, size.y/2.0), pos + ImVec2(0, size.y), col);
+}
+
+void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
+    dl->AddTriangleFilled(pos, pos + ImVec2(size.x, 0), pos + ImVec2(size.x/2.0, size.y), col);
+}
+
 void TraceView(ImVec2 pos, ImVec2 size) {
     auto fg = ImColor(0,0,0);
     auto grid = ImColor(100,100,100);
@@ -200,8 +208,21 @@ void TraceView(ImVec2 pos, ImVec2 size) {
         dl->AddLine(textpos, textpos + ImVec2(size0.x - 1, 1), ImColor(220,220,220));
         dl->AddRectFilled(textpos + ImVec2(0, 1), textpos + ImVec2(size0.x - 1, 18), ImColor(180,180,180));
         dl->AddRectFilled(textpos + ImVec2(0, 18), textpos + ImVec2(size0.x - 1, 19), ImColor(150,150,150));
-        dl->AddText(textpos + ImVec2(5, 0), fg, g->name, NULL);
+        dl->AddText(textpos + ImVec2(20, 0), fg, g->name, NULL);
+        if (g->flags & GRP_FOLDED) {
+            DrawRightTriangle(dl, textpos + ImVec2(5, 4), ImVec2(11, 11), fg);
+        } else {
+            DrawDownTriangle(dl, textpos + ImVec2(5, 4), ImVec2(11, 11), fg);
+        }
+        if (ImGui::IsMouseHoveringRect(textpos, textpos + ImVec2(200, 19))) {
+            if (ImGui::IsMouseClicked(0)) {
+                g->flags ^= GRP_FOLDED;
+            }
+        }
         textpos += ImVec2(0, 20);
+        if (g->flags & GRP_FOLDED) {
+            continue;
+        }
         for (track_t* t = g->first; t != NULL; t = t->next) {
             textpos += ImVec2(0, 18);
         }
@@ -212,6 +233,9 @@ void TraceView(ImVec2 pos, ImVec2 size) {
     textpos = pos0 + ImVec2(5, 22);
     for (group_t* g = groups; g != NULL; g = g->next) {
         textpos += ImVec2(0, 20);
+        if (g->flags & GRP_FOLDED) {
+            continue;
+        }
         for (track_t* t = g->first; t != NULL; t = t->next) {
             dl->AddText(textpos, fg, t->name, NULL);
             textpos += ImVec2(0, 18);
@@ -223,6 +247,9 @@ void TraceView(ImVec2 pos, ImVec2 size) {
     pos += ImVec2(0, 22);
     for (group_t* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, 20);
+        if (g->flags & GRP_FOLDED) {
+            continue;
+        }
         for (track_t* t = g->first; t != NULL; t = t->next) {
             taskstate_t* task = t->task + 1;
             taskstate_t* end = t->task + t->taskcount - 1;
