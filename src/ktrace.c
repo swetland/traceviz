@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// for strdup
+#define _POSIX_C_SOURCE 200809L
+
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -12,21 +15,6 @@
 #include "ktrace.h"
 
 #include "traceviz.h"
-
-// USE_NS 1 means pass time as 000.000 (microseconds) to traceview
-//          internal timestamps in nanoseconds
-
-// USE_NS 0 means pass time as 000 (microsecons) to traceview (less precise)
-//          internal timestamps in microseconds
-
-#define USE_NS 1
-
-// define a 1 microsecond constant for internal timestamps
-#if USE_NS
-#define TS1 1000
-#else
-#define TS1 1
-#endif
 
 #define FNV32_PRIME (16777619)
 #define FNV32_OFFSET_BASIS (2166136261)
@@ -58,11 +46,14 @@ group_t* group_create(void) {
 
 track_t* track_create(group_t* group) {
     track_t* t = calloc(1, sizeof(track_t));
-    t->tasksize = 512;
+    t->tasksize = 128;
     t->taskcount = 1;
     t->task = malloc(sizeof(taskstate_t) * t->tasksize);
     t->task[0].ts = 0;
     t->task[0].state = TS_NONE;
+    t->eventsize = 128;
+    t->eventcount = 0;
+    t->event = malloc(sizeof(event_t) * t->eventsize);
     if (group->last) {
         group->last->next = t;
     } else {
@@ -81,10 +72,22 @@ void track_append(track_t* t, uint64_t ts, uint32_t state) {
     t->task[t->taskcount++].state = state;
 }
 
+void track_add_event(track_t* t, uint64_t ts, uint32_t tag) {
+    if (t->eventcount == t->eventsize) {
+        t->eventsize *= 2;
+        t->event = realloc(t->event, sizeof(event_t) * t->eventsize);
+    }
+    t->event[t->eventcount].ts = ts;
+    t->event[t->eventcount++].tag = tag;
+}
+
 typedef struct objinfo objinfo_t;
 struct objinfo {
     objinfo_t* next;
-    void* track;
+    union {
+        track_t* track;
+        group_t* group;
+    };
     uint32_t id;
     uint32_t kind;
     uint32_t flags;
@@ -92,13 +95,9 @@ struct objinfo {
     uint32_t extra;
     uint32_t seq_src;
     uint32_t seq_dst;
-    uint32_t last_state;
-    uint64_t last_ts;
 };
 
 #define F_DEAD 1
-#define F_INVISIBLE 2
-#define F_RUNNING 4
 
 #define HASHBITS 10
 #define BUCKETS (1 << HASHBITS)
@@ -201,11 +200,7 @@ static uint64_t ticks_per_ms;
 uint64_t ticks_to_ts(uint64_t ts) {
     //TODO: handle overflow for large times
     if (ticks_per_ms) {
-#if USE_NS
         return (ts * 1000000UL) / ticks_per_ms;
-#else
-        return (ts * 1000UL) / ticks_per_ms;
-#endif
     } else {
         return 0;
     }
@@ -238,12 +233,7 @@ uint32_t thread_to_process(uint32_t id) {
 }
 
 int verbose = 0;
-int json = 0;
 int text = 0;
-int with_kthreads = 0;
-int with_msgpipe_io = 0;
-int with_waiting = 0;
-int with_syscalls = 0;
 
 typedef struct evtinfo {
     uint64_t ts;
@@ -261,388 +251,97 @@ void trace_hdr(evt_info_t* ei, uint32_t tag) {
     case TAG_TICKS_PER_MS:
     case TAG_PROC_NAME:
     case TAG_THREAD_NAME:
-#if USE_NS
         printf("                          ");
-#else
-        printf("                       ");
-#endif
         return;
     }
-#if USE_NS
     printf("%04lu.%09lu [%08x] ",
            ei->ts/(1000000000UL), ei->ts%(1000000000UL), ei->tid);
-#else
-    printf("%04lu.%06lu [%08x] ",
-           ei->ts/(1000000UL), ei->ts%(1000000UL), ei->tid);
-#endif
-}
-
-char* _json(char* out, const char* name, va_list ap) {
-    const char* str;
-    uint32_t val32;
-    uint64_t val64;
-    int depth = 0;
-    int comma = 0;
-    for (;;) {
-        if (name == NULL) {
-            break;
-        }
-        if (comma && (name[0] != '}')) {
-            *out++ = ',';
-        }
-        switch (name[0]) {
-        case '#':
-            val32 = va_arg(ap, uint32_t);
-            out += sprintf(out, "\"%s\":%u", name + 1, val32);
-            comma = 1;
-            break;
-        case '@':
-            val64 = va_arg(ap, uint64_t);
-            if (val64 == 0) {
-                fprintf(stderr, "error: duration 0 (dropping event)\n");
-                return NULL;
-            }
-#if USE_NS
-            out += sprintf(out, "\"%s\":%lu.%03lu", name + 1, val64 / 1000UL, val64 % 1000UL);
-#else
-            out += sprintf(out, "\"%s\":%lu", name + 1, val64);
-#endif
-            comma = 1;
-            break;
-        case '{':
-            out += sprintf(out, "\"%s\":{", name + 1);
-            depth++;
-            comma = 0;
-            break;
-        case '}':
-            if (depth == 0) {
-                fprintf(stderr, "fatal: unbalanced json\n");
-                exit(-1);
-            }
-            *out++ = '}';
-            depth--;
-            comma = 1;
-            break;
-        default:
-            str = va_arg(ap, const char*);
-            out += sprintf(out, "\"%s\":\"%s\"", name, str);
-            comma = 1;
-            break;
-        }
-        name = va_arg(ap, const char*);
-    }
-    *out = 0;
-    if (depth > 0) {
-        fprintf(stderr, "fatal: unbalanced json\n");
-        exit(-1);
-    }
-    return out;
-}
-
-void json_obj(const char* name0, ...) {
-    if (json) {
-        char obj[1024];
-        char *out;
-        obj[0] = '{';
-        va_list ap;
-        va_start(ap, name0);
-        if ((out = _json(obj + 1, name0, ap)) == NULL) {
-            return;
-        }
-        va_end(ap);
-        out += sprintf(out, "},\n");
-        fwrite(obj, 1, out - obj, stdout);
-    }
-}
-
-void json_rec(uint64_t ts, const char* phase, const char* name, const char* cat,
-              const char* name0, ...) {
-    if (json) {
-        char obj[1024];
-        char *out;
-#if USE_NS
-        out = obj + sprintf(obj, "{\"ts\":%lu.%03lu,\"ph\":\"%s\",\"name\":\"%s\",\"cat\":\"%s\",",
-                            ts / 1000UL, ts % 1000UL, phase, name, cat);
-#else
-        out = obj + sprintf(obj, "{\"ts\":%lu,\"ph\":\"%s\",\"name\":\"%s\",\"cat\":\"%s\",",
-                            ts, phase, name, cat);
-#endif
-        va_list ap;
-        va_start(ap, name0);
-        out = _json(out, name0, ap);
-        va_end(ap);
-        if (out == NULL) {
-            return;
-        }
-        out += sprintf(out, "},\n");
-        fwrite(obj, 1, out - obj, stdout);
-    }
-}
-
-enum thread_state {
-    THREAD_SUSPENDED = 0,
-    THREAD_READY,
-    THREAD_RUNNING,
-    THREAD_BLOCKED,
-    THREAD_SLEEPING,
-    THREAD_DEATH,
-};
-const char* thread_state_msg(uint32_t state) {
-    switch (state) {
-    case THREAD_SUSPENDED: return "suspended";
-    case THREAD_READY: return "ready";
-    case THREAD_RUNNING: return "running";
-    case THREAD_BLOCKED: return "waiting";
-    case THREAD_SLEEPING: return "";
-    case THREAD_DEATH: return "dead";
-    default: return "unknown";
-    }
-}
-const char* thread_state_color(uint32_t state) {
-    switch (state) {
-    case THREAD_SUSPENDED: return "thread_state_runnable";
-    case THREAD_READY: return "thread_state_runnable";
-    case THREAD_RUNNING: return "thread_state_running";
-    case THREAD_BLOCKED: return "thread_state_unknown";
-    case THREAD_SLEEPING: return "thread_state_sleeping";
-    case THREAD_DEATH: return "thread_state_iowait";
-    default: return "unknown";
-    }
 }
 
 void evt_context_switch(evt_info_t* ei, uint32_t newpid, uint32_t newtid,
                         uint32_t state, uint32_t cpu, uint32_t oldthread, uint32_t newthread) {
+#if KTHREADS
     char name[32];
     sprintf(name, "cpu%u", cpu);
-
-    // for both user and kernel threads we emit a complete event (start + duration)
-    // if the old thread has a recorded start timestamp, and we record a start
-    // timestamp in the new thread that we're switching to.
-    if (with_kthreads) {
-        if (ei->tid == 0) {
-            kthread_t* t = find_kthread(oldthread);
-            if (t->last_ts) {
-                json_rec(t->last_ts, "X", name, name,
-                         "@dur", ei->ts - t->last_ts,
-                         "#pid", 0,
-                         "#tid", oldthread, NULL);
-                t->last_ts = 0;
-            }
-        }
-        if (newtid == 0) {
-            kthread_t* t = find_kthread(newthread);
-            if (t->last_ts) {
-                fprintf(stderr, "error: kthread %x already running?!\n", newthread);
-            }
-            t->last_ts = ei->ts;
-        }
+    if (ei->tid == 0) {
+        kthread_t* t = find_kthread(oldthread);
     }
-    if (ei->pid && ei->tid && !is_object(ei->pid, F_INVISIBLE)) {
+    if (newtid == 0) {
+        kthread_t* t = find_kthread(newthread);
+    }
+#endif
+    if (ei->pid && ei->tid) {
         objinfo_t* oi = find_object(ei->tid, KTHREAD);
         if (oi) {
             track_append(oi->track, ei->ts, state);
-            // we're going to sleep, record our wake time
-            if (oi->last_ts) {
-                json_rec(oi->last_ts, "X", name, "thread",
-                         "@dur", ei->ts - oi->last_ts,
-                         "cname", "thread_state_running",
-                         "#pid", ei->pid,
-                         "#tid", ei->tid, NULL);
-            }
-            oi->last_state = state;
-            oi->last_ts = ei->ts;
-            oi->flags &= (~F_RUNNING);
         }
     }
-    if (newpid && newtid && !is_object(newpid, F_INVISIBLE)) {
+    if (newpid && newtid) {
         objinfo_t* oi = find_object(newtid, KTHREAD);
         if (oi) {
-            track_append(oi->track, ei->ts, THREAD_RUNNING);
-            // we just woke up, record our sleep time
-            if (oi->last_ts) {
-                json_rec(oi->last_ts, "X", thread_state_msg(oi->last_state), "thread",
-                         "@dur", ei->ts - oi->last_ts,
-                         "cname", thread_state_color(oi->last_state),
-                         "#pid", newpid,
-                         "#tid", newtid, NULL);
-            }
-            oi->last_ts = ei->ts;
-            oi->flags = F_RUNNING;
+            track_append(oi->track, ei->ts, TS_RUNNING);
         }
     }
 }
 
 void end_of_trace(objinfo_t* oi, uint64_t ts) {
     if (oi->kind == KTHREAD) {
-        if (is_object(oi->extra, F_INVISIBLE)) {
-            return;
-        }
+        // final mark at the final timestamp
         track_append(oi->track, ts, TS_NONE);
-        if (oi->flags & F_RUNNING) {
-            // simulate context switch away
-            json_rec(oi->last_ts, "X", "cpu", "thread",
-                     "@dur", ts - oi->last_ts,
-                     "cname", "thread_state_running",
-                     "#pid", oi->extra,
-                     "#tid", oi->id, NULL);
-        } else {
-            // simulate context switch back
-            json_rec(oi->last_ts, "X", thread_state_msg(oi->last_state), "thread",
-                     "@dur", (oi->last_state == THREAD_DEATH) ? 10000 : (ts - oi->last_ts),
-                     "cname", thread_state_color(oi->last_state),
-                     "#pid", oi->extra,
-                     "#tid", oi->id, NULL);
-        }
     }
 }
 
-#define SYSCALL(args...) \
-do { if (with_syscalls && ei->pid && ei->tid) { \
-    char namestr[64]; \
-    sprintf(namestr, "syscalls (%u)", ei->tid); \
-    json_rec(ei->ts, "O", namestr, "syscall", \
-             "#id", ei->tid, \
-             "scope", "syscall", \
-             "{args", "{snapshot", args, "}", "}", \
-             "#pid", ei->pid, \
-             "#tid", ei->tid, NULL); \
-} } while (0)
-
-
-uint32_t uniq = 1;
 
 void evt_process_create(evt_info_t* ei, uint32_t pid) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "process_create()", "#pid", pid);
 }
 void evt_process_delete(evt_info_t* ei, uint32_t pid) {
 }
 void evt_process_start(evt_info_t* ei, uint32_t pid, uint32_t tid) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "process_start()", "#pid", pid, "#tid", tid);
 }
 void evt_process_name(uint32_t pid, const char* name, uint32_t index) {
     objinfo_t* oi = find_object(pid, KPROC);
     if (oi) {
-        ((track_t*)oi->track)->name = strdup(name);
+        oi->group->name = strdup(name);
     }
-    if (is_object(pid, F_INVISIBLE)) {
-        return;
-    }
-    json_obj("ph", "M",
-             "name", "process_name",
-             "#pid", pid,
-             "{args",
-             "name", name,
-             "}", NULL);
-    json_obj("ph", "M",
-             "name", "process_sort_index",
-             "#pid", pid,
-             "{args",
-             "#sort_index", index,
-             "}", NULL);
 }
 
 void evt_thread_create(evt_info_t* ei, uint32_t tid, uint32_t pid) {
 }
 void evt_thread_delete(evt_info_t* ei, uint32_t tid) {
-#if 0 // not reliable, deletion != exit
-    uint32_t pid = thread_to_process(tid);
-    if (pid == 0) return;
-    json_rec(ei->ts, "X", "exit", "thread",
-             "#dur", 100,
-             "cname", "thread_state_iowait",
-             "#pid", pid,
-             "#tid", tid, NULL);
-#endif
 }
 void evt_thread_start(evt_info_t* ei, uint32_t tid) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "thread_start()", "#tid", tid);
 }
 void evt_thread_name(uint32_t pid, uint32_t tid, const char* name) {
     char tmp[128];
     sprintf(tmp, "%s (%u)", name, tid);
     objinfo_t* oi = find_object(tid, KTHREAD);
     if (oi) {
-        ((track_t*)oi->track)->name = strdup(tmp);
+        oi->track->name = strdup(tmp);
     }
-    json_obj("ph", "M",
-             "name", "thread_name",
-             "#pid", pid,
-             "#tid", tid,
-             "{args",
-             "name", tmp,
-             "}", NULL);
-    if (pid == 0) {
-        return;
-    }
-    if (!with_msgpipe_io) {
-        return;
-    }
-    // create a parallel track for io flow markup
-    sprintf(tmp, "%s-io (%u)", name, tid);
-    char tmp2[64];
-    sprintf(tmp2, "io:%u", tid);
-    json_obj("ph", "M",
-             "name", "thread_name",
-             "#pid", pid,
-             "tid", tmp2,
-             "{args",
-             "name", tmp,
-             "}", NULL);
 }
 
 void evt_msgpipe_create(evt_info_t* ei, uint32_t id, uint32_t otherid) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_CREATE);
     }
-    SYSCALL("op", "msgpipe_create()", "#id0", id, "#id1", otherid);
 }
 
 void evt_msgpipe_delete(evt_info_t* ei, uint32_t id) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "msgpipe_delete()", "#mpid", id);
 }
 void evt_msgpipe_write(evt_info_t* ei, uint32_t id, uint32_t otherid,
                        uint32_t bytes, uint32_t handles) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
     if (ei->pid == 0) {
         // ignore writes from unknown threads
         return;
     }
-    SYSCALL("op", "msgpipe_write()", "#mpid", id, "#otherid", otherid,
-            "#bytes", bytes, "#handles", handles);
 
-    if (!with_msgpipe_io) {
-        return;
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_WRITE);
     }
-    char tidstr[64];
-    sprintf(tidstr, "io:%u", ei->tid);
 
-    // duration 1 event to mark the write
-    // instant events frustratingly vanish when you zoom in!
-    json_rec(ei->ts, "X", "msg-read", "object",
-             "@dur", TS1,
-             "cname", "good",
-             "#pid", ei->pid,
-             "tid", tidstr,
-             "{args",
-             "func", "msgpipe_write()",
-             "#bytes", bytes,
-             "#handles", handles,
-             "}", NULL);
-
+#if 0
     // if we can find the other half, start a flow event from
     // here to there
     objinfo_t* oi = find_object(id, KPIPE);
@@ -654,39 +353,21 @@ void evt_msgpipe_write(evt_info_t* ei, uint32_t id, uint32_t otherid,
              "#pid", ei->pid,
              "tid", tidstr,
              NULL);
+#endif
 }
+
 void evt_msgpipe_read(evt_info_t* ei, uint32_t id, uint32_t otherid,
                       uint32_t bytes, uint32_t handles) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
     if (ei->pid == 0) {
         // ignore reads from unknown threads
         return;
     }
 
-    SYSCALL("op", "msgpipe_read()", "#mpid", id, "#otherid", otherid,
-            "#bytes", bytes, "#handles", handles);
-
-    if (!with_msgpipe_io) {
-        return;
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_READ);
     }
-
-    char tidstr[64];
-    sprintf(tidstr, "io:%u", ei->tid);
-    // duration 1 event to mark the read
-    // instant events frustratingly vanish when you zoom in!
-    json_rec(ei->ts, "X", "msg-read", "object",
-             "@dur", TS1,
-             "cname", "good",
-             "#pid", ei->pid,
-             "tid", tidstr,
-             "{args",
-             "call", "msgpipe_read()",
-             "#bytes", bytes,
-             "#handles", handles,
-             "}", NULL);
-
+#if 0
     // if we can find the other half, finish a flow event
     // from there to here
     objinfo_t* oi = find_object(otherid, KPIPE);
@@ -699,77 +380,22 @@ void evt_msgpipe_read(evt_info_t* ei, uint32_t id, uint32_t otherid,
              "#pid", ei->pid,
              "tid", tidstr,
              NULL);
+#endif
 }
 
 void evt_port_create(evt_info_t* ei, uint32_t id) {
 }
 void evt_port_wait(evt_info_t* ei, uint32_t id) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "port_wait()", "#portid", id);
-
-    if (!with_waiting) {
-        return;
-    }
-    char tidstr[64];
-    sprintf(tidstr, "io:%u", ei->tid);
-    json_rec(ei->ts, "i", "wait-port", "port",
-             "@dur", TS1,
-             "cname", "thread_state_iowait",
-             "#pid", ei->pid,
-             "tid", tidstr,
-             NULL);
 }
 void evt_port_wait_done(evt_info_t* ei, uint32_t id) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "port_wait() done", "#portid", id);
 }
-
 void evt_port_delete(evt_info_t* ei, uint32_t id) {
 }
 
 void evt_wait_one(evt_info_t* ei, uint32_t id, uint32_t signals, uint64_t timeout) {
-    if (is_object(ei->pid, F_INVISIBLE)) {
-        return;
-    }
-    SYSCALL("op", "wait_one()", "#oid", id);
-
-    if (!with_waiting) {
-        return;
-    }
-    char tidstr[64];
-    sprintf(tidstr, "io:%u", ei->tid);
-    json_rec(ei->ts, "i", "wait-object", "object",
-             "@dur", TS1,
-             "cname", "thread_state_iowait",
-             "#pid", ei->pid,
-             "tid", tidstr,
-             NULL);
 }
 void evt_wait_one_done(evt_info_t* ei, uint32_t id, uint32_t pending, uint32_t status) {
-    SYSCALL("op", "wait_one() done", "#oid", id, "#pending", pending, "#status", status);
 }
-
-int usage(void) {
-    fprintf(stderr,
-            "usage: ktracedump [ <option> ]* <tracefile>\n\n"
-            "option: -text        plain text output\n"
-            "        -json        chrome://tracing output (default)\n"
-            "        -limit=n     stop after n events\n"
-            "        -msgpipe-io  show msgpipe read/write w/ flow\n"
-            "        -kthreads    show kernel threads too\n"
-            "        -wait-io     show waiting in msgpipe flow tracks\n"
-            "        -syscalls    show syscall timelines\n"
-            "        -all         enable all tracing features\n"
-            "        -stats       print summary of trace at end\n"
-            "        -onlypid=... only display pid(s) listed (comma separated)\n"
-            );
-    return -1;
-}
-
 
 typedef struct {
     uint64_t ts_first;
@@ -801,10 +427,6 @@ void dump_stats(stats_t* s) {
     fprintf(stderr, "process created:  %u\n", s->process_new);
 }
 
-#define MAX_VIS_PIDS 64
-uint32_t visible_pids[MAX_VIS_PIDS];
-uint32_t visible_count;
-
 int ktrace_main(int argc, char** argv) {
     int show_stats = 0;
     stats_t s;
@@ -822,41 +444,14 @@ int ktrace_main(int argc, char** argv) {
         if (!strcmp(argv[1], "-v")) {
             verbose++;
         } else if (!strcmp(argv[1], "-text")) {
-            json = 0;
-        } else if (!strcmp(argv[1], "-json")) {
-            json = 1;
+            text = 1;
         } else if (!strncmp(argv[1], "-limit=", 7)) {
             limit = 32 * atoi(argv[1] + 7);
-        } else if (!strcmp(argv[1], "-msgpipe-io")) {
-            with_msgpipe_io = 1;
-        } else if (!strcmp(argv[1], "-kthreads")) {
-            with_kthreads = 1;
-        } else if (!strcmp(argv[1], "-wait-io")) {
-            with_waiting = 1;
-        } else if (!strcmp(argv[1], "-syscalls")) {
-            with_syscalls = 1;
-        } else if (!strcmp(argv[1], "-all")) {
-            with_msgpipe_io = 1;
-            with_kthreads = 1;
-            with_waiting = 1;
-            with_syscalls = 1;
         } else if (!strcmp(argv[1], "-stats")) {
             show_stats = 1;
-        } else if (!strncmp(argv[1], "-onlypid=", 9)) {
-            char* next;
-            for (char* x = argv[1] + 9; x != NULL; x = next) {
-                next = strchr(x, ',');
-                if (next) {
-                    *next++ = 0;
-                }
-                visible_pids[visible_count++] = strtoul(x, NULL, 0);
-                if (visible_count == MAX_VIS_PIDS) {
-                    break;
-                }
-            }
         } else if (argv[1][0] == '-') {
             fprintf(stderr, "error: unknown option '%s'\n\n", argv[0]);
-            return usage();
+            return -1;
         } else {
             break;
         }
@@ -865,7 +460,7 @@ int ktrace_main(int argc, char** argv) {
     }
 
     if (argc != 2) {
-        return usage();
+        return -1;
     }
 
     int fd;
@@ -874,19 +469,7 @@ int ktrace_main(int argc, char** argv) {
         return -1;
     }
 
-    if (json) {
-#if USE_NS
-        printf("{\"displayTimeUnit\":\"ns\",\n"
-               "\"metadata\":{\"highres-ticks\":true},\n"
-               "\"traceEvents\":[\n");
-#else
-        printf("[\n");
-#endif
-    }
-
-    if (with_kthreads) {
-        evt_process_name(0, "Magenta Kernel", 0);
-    }
+    evt_process_name(0, "Magenta Kernel", 0);
 
     evt_info_t ei;
     while (read(fd, &rec, sizeof(rec)) == sizeof(rec)) {
@@ -951,16 +534,7 @@ int ktrace_main(int argc, char** argv) {
             s.process_new++;
             trace("PROC_CREATE id=%08x\n", rec.a);
             oi = new_object(rec.a, KPROC, rec.id, 0);
-            oi->track = group_create();
-            if (visible_count) {
-                oi->flags |= F_INVISIBLE;
-                for (unsigned n = 0; n < visible_count; n++) {
-                    if (oi->id == visible_pids[n]) {
-                        oi->flags &= (~F_INVISIBLE);
-                        break;
-                    }
-                }
-            }
+            oi->group = group_create();
             evt_process_create(&ei, rec.a);
             break;
         case TAG_PROC_NAME:
@@ -978,12 +552,9 @@ int ktrace_main(int argc, char** argv) {
             oi2 = find_object(rec.b, KPROC);
             if (oi2 == NULL) {
                 oi2 = new_object(rec.b, KPROC, 0, 0);
-                oi2->track = group_create();
+                oi2->group = group_create();
             }
-            oi->track = track_create((group_t*) oi2->track);
-            if (oi2->flags & F_INVISIBLE) {
-                oi->flags |= F_INVISIBLE;
-            }
+            oi->track = track_create(oi2->group);
             evt_thread_create(&ei, rec.a, rec.b);
             break;
         case TAG_THREAD_NAME:
@@ -1049,14 +620,6 @@ int ktrace_main(int argc, char** argv) {
         for_each_object(end_of_trace, ei.ts);
     }
     add_groups(group_list);
-
-    if (json) {
-#if USE_NS
-        printf("{}\n]\n}\n");
-#else
-        printf("{}\n]\n");
-#endif
-    }
 
     if (show_stats) {
         dump_stats(&s);
