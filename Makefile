@@ -6,7 +6,7 @@ IMGUI := third_party/imgui
 
 FLAGS := -MMD -g -Wall -Wformat
 FLAGS += -Isrc -I$(IMGUI)
-
+FLAGS += -DImDrawIdx=unsigned
 SRCS := src/traceviz.cpp src/ktrace.c
 SRCS += $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp
 
@@ -34,11 +34,11 @@ CXXFLAGS := -std=c++11 $(FLAGS)
 
 MKDIR = mkdir -p $(dir $@)
 
-out/%.o: %.cpp
+out/%.o: %.cpp Makefile
 	@$(MKDIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-out/%.o: %.c
+out/%.o: %.c Makefile
 	@$(MKDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
