@@ -107,7 +107,7 @@ void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, 0), pos + ImVec2(size.x/2.0, size.y), col);
 }
 
-void TraceView(ImVec2 pos, ImVec2 size) {
+void TraceView(ImVec2 origin, ImVec2 content) {
     auto fg = ImColor(0,0,0);
     auto grid = ImColor(100,100,100);
     auto dl = ImGui::GetWindowDrawList();
@@ -142,8 +142,8 @@ void TraceView(ImVec2 pos, ImVec2 size) {
 
     if (zoomed) {
         auto mpos = ImGui::GetMousePos();
-        mpos -= pos + ImVec2(200, 0);
-        if ((mpos.x >= 0) && (mpos.x < size.x)) {
+        mpos -= origin + ImVec2(200, 0);
+        if ((mpos.x >= 0) && (mpos.x < content.x)) {
             // if cursor is over window, compensate for zoom
             tpos = tpos + (oldscale * mpos.x) - (tscale * mpos.x);
         }
@@ -176,77 +176,87 @@ void TraceView(ImVec2 pos, ImVec2 size) {
     // figure the adjustment to start of drawing in pixels
     float adj = (tsedge - ts) / tscale;
 
-    ImVec2 pos0 = pos;
-    ImVec2 size0 = size;
+    // Drawing Constants
+#define W_NAMES 200
+#define H_TICK  20
+#define Y_TICK  15
+#define H_RULER 22
+#define H_GROUP 20
+#define H_TRACE 18
 
     // Draw Ruler and Grid
-    pos += ImVec2(200, 0);
-    size -= ImVec2(200, 0);
+    ImVec2 pos = origin + ImVec2(W_NAMES, 0);
+    ImVec2 size = content - ImVec2(W_NAMES, 0);
     if (size.x < 0) {
         return;
     }
     ImGui::PushClipRect(pos, pos + size, false);
     dl->AddRect(pos, pos + size, fg);
-    dl->AddLine(pos + ImVec2(0, 20), pos + ImVec2(size.x, 20), fg);
+    dl->AddLine(pos + ImVec2(0, H_RULER), pos + ImVec2(size.x, H_RULER), fg);
     for (float x = 0 - adj; x < size.x; ) {
         char tmp[64];
         sprintf(tmp, "%ld%s", ts / tdiv, tunit);
         dl->AddText(pos + ImVec2(x + 3, 0), fg, tmp);
         ts += tsegment;
-        dl->AddLine(pos + ImVec2(x, 20), pos + ImVec2(x, size.y), grid);
-        dl->AddLine(pos + ImVec2(x, 0), pos + ImVec2(x, 20), fg); x += tick;
-        dl->AddLine(pos + ImVec2(x, 15), pos + ImVec2(x, 20), fg); x += tick;
-        dl->AddLine(pos + ImVec2(x, 15), pos + ImVec2(x, 20), fg); x += tick;
-        dl->AddLine(pos + ImVec2(x, 15), pos + ImVec2(x, 20), fg); x += tick;
-        dl->AddLine(pos + ImVec2(x, 15), pos + ImVec2(x, 20), fg); x += tick;
+        dl->AddLine(pos + ImVec2(x, H_TICK), pos + ImVec2(x, size.y), grid);
+        dl->AddLine(pos + ImVec2(x, 0),      pos + ImVec2(x, H_TICK), fg); x += tick;
+        dl->AddLine(pos + ImVec2(x, Y_TICK), pos + ImVec2(x, H_TICK), fg); x += tick;
+        dl->AddLine(pos + ImVec2(x, Y_TICK), pos + ImVec2(x, H_TICK), fg); x += tick;
+        dl->AddLine(pos + ImVec2(x, Y_TICK), pos + ImVec2(x, H_TICK), fg); x += tick;
+        dl->AddLine(pos + ImVec2(x, Y_TICK), pos + ImVec2(x, H_TICK), fg); x += tick;
     }
     ImGui::PopClipRect();
 
     // Draw Group Names and Bars
-    ImVec2 textpos = pos0 + ImVec2(0, 22);
+    pos = origin + ImVec2(0, H_RULER);
+    size = content;
     for (group_t* g = groups; g != NULL; g = g->next) {
-        dl->AddLine(textpos, textpos + ImVec2(size0.x - 1, 1), ImColor(220,220,220));
-        dl->AddRectFilled(textpos + ImVec2(0, 1), textpos + ImVec2(size0.x - 1, 18), ImColor(180,180,180));
-        dl->AddRectFilled(textpos + ImVec2(0, 18), textpos + ImVec2(size0.x - 1, 19), ImColor(150,150,150));
-        dl->AddText(textpos + ImVec2(20, 0), fg, g->name, NULL);
+        dl->AddLine(pos, pos + ImVec2(size.x - 1, 1), ImColor(220,220,220));
+        dl->AddRectFilled(pos + ImVec2(0, 1),  pos + ImVec2(size.x - 1, H_GROUP - 2),
+                          ImColor(180,180,180));
+        dl->AddRectFilled(pos + ImVec2(0, H_GROUP - 2), pos + ImVec2(size.x - 1, H_GROUP - 2),
+                          ImColor(150,150,150));
+        dl->AddText(pos + ImVec2(H_GROUP, 0), fg, g->name, NULL);
         if (g->flags & GRP_FOLDED) {
-            DrawRightTriangle(dl, textpos + ImVec2(5, 4), ImVec2(11, 11), fg);
+            DrawRightTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
         } else {
-            DrawDownTriangle(dl, textpos + ImVec2(5, 4), ImVec2(11, 11), fg);
+            DrawDownTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
         }
-        if (ImGui::IsMouseHoveringRect(textpos, textpos + ImVec2(200, 19))) {
+        if (ImGui::IsMouseHoveringRect(pos, pos + ImVec2(W_NAMES, H_GROUP))) {
             if (ImGui::IsMouseClicked(0)) {
                 g->flags ^= GRP_FOLDED;
             }
         }
-        textpos += ImVec2(0, 20);
+        pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
         for (track_t* t = g->first; t != NULL; t = t->next) {
-            textpos += ImVec2(0, 18);
+            pos += ImVec2(0, H_TRACE);
         }
     }
 
     // Draw Track Names
-    ImGui::PushClipRect(pos0, pos0 + ImVec2(200, size.y), false);
-    textpos = pos0 + ImVec2(5, 22);
+    pos = origin + ImVec2(5, H_RULER);
+    size = content;
+    ImGui::PushClipRect(pos, pos + ImVec2(W_NAMES, size.y), false);
     for (group_t* g = groups; g != NULL; g = g->next) {
-        textpos += ImVec2(0, 20);
+        pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
         for (track_t* t = g->first; t != NULL; t = t->next) {
-            dl->AddText(textpos, fg, t->name, NULL);
-            textpos += ImVec2(0, 18);
+            dl->AddText(pos, fg, t->name, NULL);
+            pos += ImVec2(0, H_TRACE);
         }
     }
     ImGui::PopClipRect();
 
+    pos = origin + ImVec2(W_NAMES, H_RULER);
+    size = content - ImVec2(W_NAMES, 0);
     ImGui::PushClipRect(pos + ImVec2(1,0), pos + size - ImVec2(1,0), false);
-    pos += ImVec2(0, 22);
     for (group_t* g = groups; g != NULL; g = g->next) {
-        pos += ImVec2(0, 20);
+        pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
@@ -283,11 +293,11 @@ void TraceView(ImVec2 pos, ImVec2 size) {
                 x1 = (x1 - tsedge) / tscale;
 
                 if (x1 > last_x) {
-                    dl->AddRectFilled(pos + ImVec2(x0, 0), pos + ImVec2(x1, 16), color);
+                    dl->AddRectFilled(pos + ImVec2(x0, 0), pos + ImVec2(x1, H_TRACE - 2), color);
                 }
                 last_x = x1;
             }
-            pos += ImVec2(0, 18);
+            pos += ImVec2(0, H_TRACE);
         }
     }
     ImGui::PopClipRect();
