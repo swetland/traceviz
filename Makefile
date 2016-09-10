@@ -8,6 +8,7 @@ FLAGS := -MMD -g -Wall -Wformat
 FLAGS += -Isrc -I$(IMGUI)
 FLAGS += -DImDrawIdx=unsigned
 SRCS := src/traceviz.cpp src/ktrace.c
+SRCS += src/font-droid-sans.S
 SRCS += $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp
 
 #SRCS += src/main-opengl3.cpp
@@ -24,7 +25,8 @@ LIBS := `sdl2-config --libs` -lGL -ldl
 FLAGS += -I$(IMGUI)/examples/libs/gl3w -I$(IMGUI)/examples/sdl_opengl3_example
 FLAGS += `sdl2-config --cflags`
 
-OBJS := $(patsubst %,out/%,$(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SRCS))))
+OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SRCS))))
+OBJS := $(patsubst %,out/%,$(OBJS))
 DEPS := $(patsubst %.o,%.d,$(OBJS))
 
 UNAME_S := $(shell uname -s)
@@ -39,6 +41,10 @@ out/%.o: %.cpp Makefile
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 out/%.o: %.c Makefile
+	@$(MKDIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+out/%.o: %.S Makefile
 	@$(MKDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
