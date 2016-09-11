@@ -34,7 +34,7 @@ group_t* group_last;
 group_t* group_kernel;
 
 group_t* group_create(void) {
-    group_t* g = calloc(1, sizeof(group_t));
+    group_t* g = (group_t*)calloc(1, sizeof(group_t));
     if (group_last) {
         group_last->next = g;
     } else {
@@ -45,15 +45,15 @@ group_t* group_create(void) {
 }
 
 track_t* track_create(group_t* group) {
-    track_t* t = calloc(1, sizeof(track_t));
+    track_t* t = (track_t*)calloc(1, sizeof(track_t));
     t->tasksize = 128;
     t->taskcount = 1;
-    t->task = malloc(sizeof(taskstate_t) * t->tasksize);
+    t->task = (taskstate_t*)malloc(sizeof(taskstate_t) * t->tasksize);
     t->task[0].ts = 0;
     t->task[0].state = TS_NONE;
     t->eventsize = 128;
     t->eventcount = 0;
-    t->event = malloc(sizeof(event_t) * t->eventsize);
+    t->event = (event_t*)malloc(sizeof(event_t) * t->eventsize);
     if (group->last) {
         group->last->next = t;
     } else {
@@ -66,7 +66,7 @@ track_t* track_create(group_t* group) {
 void track_append(track_t* t, uint64_t ts, uint8_t state, uint8_t cpu) {
     if (t->taskcount == t->tasksize) {
         t->tasksize *= 2;
-        t->task = realloc(t->task, sizeof(taskstate_t) * t->tasksize);
+        t->task = (taskstate_t*)realloc(t->task, sizeof(taskstate_t) * t->tasksize);
     }
     t->task[t->taskcount].ts = ts;
     t->task[t->taskcount].state = state;
@@ -77,7 +77,7 @@ void track_append(track_t* t, uint64_t ts, uint8_t state, uint8_t cpu) {
 void track_add_event(track_t* t, uint64_t ts, uint32_t tag) {
     if (t->eventcount == t->eventsize) {
         t->eventsize *= 2;
-        t->event = realloc(t->event, sizeof(event_t) * t->eventsize);
+        t->event = (event_t*)realloc(t->event, sizeof(event_t) * t->eventsize);
     }
     t->event[t->eventcount].ts = ts;
     t->event[t->eventcount++].tag = tag;
@@ -138,7 +138,7 @@ objinfo_t* new_object(uint32_t id, uint32_t kind, uint32_t creator, uint32_t ext
     if (find_object(id, 0) != NULL) {
         fprintf(stderr, "error: object(%08x) already exists!\n", id);
     }
-    objinfo_t* oi = calloc(1, sizeof(objinfo_t));
+    objinfo_t* oi = (objinfo_t*)calloc(1, sizeof(objinfo_t));
     oi->id = id;
     oi->kind = kind;
     oi->creator = creator;
@@ -187,7 +187,7 @@ kthread_t* find_kthread(uint32_t id) {
             return t;
         }
     }
-    t = malloc(sizeof(kthread_t));
+    t = (kthread_t*)malloc(sizeof(kthread_t));
     t->id = id;
     t->last_ts = 0;
     t->next = kthread_list;

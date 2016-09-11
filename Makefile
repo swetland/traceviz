@@ -10,7 +10,7 @@ FLAGS += -DImDrawIdx=unsigned
 
 all: out/traceviz
 
-SRCS := src/traceviz.cpp src/ktrace.c
+SRCS := src/traceviz.cpp src/ktrace.cpp
 SRCS += src/font-droid-sans.S src/font-symbols.S
 SRCS += $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp
 
