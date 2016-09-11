@@ -28,17 +28,20 @@ void add_groups(group_t* list) {
 
 void adjust_tracks(void) {
     int64_t tszero = 0x7FFFFFFFFFFFFFFFUL;
-    for (group_t* group = groups; group != NULL; group = group->next) {
-        for (track_t* track = group->first; track != NULL; track = track->next) {
-            if (track->task[1].ts < tszero) {
-                tszero = track->task[1].ts;
+    for (group_t* g = groups; g != NULL; g = g->next) {
+        for (track_t* t = g->first; t != NULL; t = t->next) {
+            if (t->task[1].ts < tszero) {
+                tszero = t->task[1].ts;
             }
         }
     }
-    for (group_t* group = groups; group != NULL; group = group->next) {
-        for (track_t* track = group->first; track != NULL; track = track->next) {
-            for (unsigned n = 1; n < track->taskcount; n++) {
-                track->task[n].ts -= tszero;
+    for (group_t* g = groups; g != NULL; g = g->next) {
+        for (track_t* t = g->first; t != NULL; t = t->next) {
+            for (unsigned n = 1; n < t->taskcount; n++) {
+                t->task[n].ts -= tszero;
+            }
+            for (unsigned n = 0; n < t->eventcount; n++) {
+                t->event[n].ts -= tszero;
             }
         }
     }
@@ -98,6 +101,8 @@ static int busy = 0;
 
 static int64_t drag_offset = 0;
 static int64_t tpos = 0; // time at left edge
+
+ImFont* symbols;
 
 void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, size.y/2.0), pos + ImVec2(0, size.y), col);
@@ -252,6 +257,12 @@ void TraceView(ImVec2 origin, ImVec2 content) {
     }
     ImGui::PopClipRect();
 
+    char cpu[5];
+    cpu[0] = 'c';
+    cpu[1] = 'p';
+    cpu[2] = 'u';
+    cpu[3] = '0';
+    cpu[4] = 0;
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
     ImGui::PushClipRect(pos + ImVec2(1,0), pos + size - ImVec2(1,0), false);
@@ -294,12 +305,84 @@ void TraceView(ImVec2 origin, ImVec2 content) {
 
                 if (x1 > last_x) {
                     dl->AddRectFilled(pos + ImVec2(x0, 0), pos + ImVec2(x1, H_TRACE - 2), color);
+                    if ((task[-1].state == TS_RUNNING) && ((x1 - x0) > 50)) {
+                        cpu[3] = '0' + task[-1].cpu;
+                        dl->AddText(pos + ImVec2(x0 + 10, -2.0), fg, cpu);
+                    }
+
+                    last_x = x1;
                 }
-                last_x = x1;
             }
             pos += ImVec2(0, H_TRACE);
         }
     }
+
+    //const ImFont::Glyph* gUP = symbols->FindGlyph('A');
+    //const ImFont::Glyph* gDOWN = symbols->FindGlyph('B');
+    const ImFont::Glyph* gRIGHT = symbols->FindGlyph('C');
+    //const ImFont::Glyph* gLEFT = symbols->FindGlyph('D');
+    const ImFont::Glyph* gSQUARE = symbols->FindGlyph('E');
+    const ImFont::Glyph* gDIAMOND = symbols->FindGlyph('F');
+    const ImFont::Glyph* gCIRCLE = symbols->FindGlyph('G');
+    const ImFont::Glyph* gSEND = symbols->FindGlyph('H');
+    const ImFont::Glyph* gRECV = symbols->FindGlyph('I');
+
+    pos = origin + ImVec2(W_NAMES, H_RULER);
+    size = content - ImVec2(W_NAMES, 0);
+    for (group_t* g = groups; g != NULL; g = g->next) {
+        pos += ImVec2(0, H_GROUP);
+        if (g->flags & GRP_FOLDED) {
+            continue;
+        }
+        for (track_t* t = g->first; t != NULL; t = t->next) {
+            event_t* e = t->event;
+            event_t* end = t->event + t->eventcount - 1;
+
+            ts = tsedge;
+            int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
+            int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
+
+            while ((e < end) && (e->ts < tsend)) {
+                e++;
+                int64_t x = e->ts;
+                if (x < tsedge) {
+                    continue;
+                }
+                // convert to local coords
+                x = (x - tsedge) / tscale;
+                if (x > last_x) {
+                    const ImFont::Glyph* glyph;
+                    switch (e->tag) {
+                    case EVT_PORT_WAIT:
+                    case EVT_HANDLE_WAIT:
+                        glyph = gSQUARE;
+                        break;
+                    case EVT_PORT_WAITED:
+                    case EVT_HANDLE_WAITED:
+                        glyph = gRIGHT;
+                        break;
+                    case EVT_MSGPIPE_CREATE:
+                        glyph = gCIRCLE;
+                        break;
+                    case EVT_MSGPIPE_WRITE:
+                        glyph = gSEND;
+                        break;
+                    case EVT_MSGPIPE_READ:
+                        glyph = gRECV;
+                        break;
+                    default:
+                        glyph = gDIAMOND;
+                        break;
+                    }
+
+                    symbols->RenderGlyph(dl, pos + ImVec2(x, -1.0), ImColor(0, 0, 220), glyph);
+                    last_x = x;
+                }
+            }
+            pos += ImVec2(0, H_TRACE);
+        }
+    }
+
     ImGui::PopClipRect();
 }
 
@@ -332,6 +415,29 @@ int traceviz_main(int argc, char** argv) {
         task_float_color[n*3+0] = c.x;
         task_float_color[n*3+1] = c.y;
         task_float_color[n*3+2] = c.z;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    {
+        ImFontConfig fc;
+        fc.FontData = font_droid_sans;
+        fc.FontDataSize = size_droid_sans;
+        fc.FontDataOwnedByAtlas = false;
+        fc.SizePixels = 16.0;
+        io.Fonts->AddFont(&fc);
+    }
+
+    {
+        ImFontConfig fc;
+        fc.FontData = font_symbols;
+        fc.FontDataSize = size_symbols;
+        fc.FontDataOwnedByAtlas = false;
+        fc.SizePixels = 16.0;
+        fc.OversampleH = 1;
+        fc.OversampleV = 1;
+        fc.PixelSnapH = true;
+        symbols = io.Fonts->AddFont(&fc);
     }
 
     return 0;

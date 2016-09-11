@@ -42,12 +42,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    //TODO: eliminate copy
-    ImGuiIO& io = ImGui::GetIO();
-    void* data = malloc(size_droid_sans);
-    memcpy(data, font_droid_sans, size_droid_sans);
-    io.Fonts->AddFontFromMemoryTTF(data, size_droid_sans, 16.0);
-
     ImVec4 clear = ImColor(144, 144, 154);
 
     while (!glfwWindowShouldClose(window)) {

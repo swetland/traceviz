@@ -63,13 +63,15 @@ track_t* track_create(group_t* group) {
     return t;
 }
 
-void track_append(track_t* t, uint64_t ts, uint32_t state) {
+void track_append(track_t* t, uint64_t ts, uint8_t state, uint8_t cpu) {
     if (t->taskcount == t->tasksize) {
         t->tasksize *= 2;
         t->task = realloc(t->task, sizeof(taskstate_t) * t->tasksize);
     }
     t->task[t->taskcount].ts = ts;
-    t->task[t->taskcount++].state = state;
+    t->task[t->taskcount].state = state;
+    t->task[t->taskcount].cpu = cpu;
+    t->taskcount++;
 }
 
 void track_add_event(track_t* t, uint64_t ts, uint32_t tag) {
@@ -273,13 +275,13 @@ void evt_context_switch(evt_info_t* ei, uint32_t newpid, uint32_t newtid,
     if (ei->pid && ei->tid) {
         objinfo_t* oi = find_object(ei->tid, KTHREAD);
         if (oi) {
-            track_append(oi->track, ei->ts, state);
+            track_append(oi->track, ei->ts, state, 0);
         }
     }
     if (newpid && newtid) {
         objinfo_t* oi = find_object(newtid, KTHREAD);
         if (oi) {
-            track_append(oi->track, ei->ts, TS_RUNNING);
+            track_append(oi->track, ei->ts, TS_RUNNING, cpu);
         }
     }
 }
@@ -287,7 +289,7 @@ void evt_context_switch(evt_info_t* ei, uint32_t newpid, uint32_t newtid,
 void end_of_trace(objinfo_t* oi, uint64_t ts) {
     if (oi->kind == KTHREAD) {
         // final mark at the final timestamp
-        track_append(oi->track, ts, TS_NONE);
+        track_append(oi->track, ts, TS_NONE, 0);
     }
 }
 
@@ -323,7 +325,7 @@ void evt_thread_name(uint32_t pid, uint32_t tid, const char* name) {
 void evt_msgpipe_create(evt_info_t* ei, uint32_t id, uint32_t otherid) {
     objinfo_t* oi = find_object(ei->tid, KTHREAD);
     if (oi) {
-        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_CREATE);
+        track_add_event(oi->track, ei->ts, EVT_MSGPIPE_CREATE);
     }
 }
 
@@ -338,7 +340,7 @@ void evt_msgpipe_write(evt_info_t* ei, uint32_t id, uint32_t otherid,
 
     objinfo_t* oi = find_object(ei->tid, KTHREAD);
     if (oi) {
-        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_WRITE);
+        track_add_event(oi->track, ei->ts, EVT_MSGPIPE_WRITE);
     }
 
 #if 0
@@ -365,7 +367,7 @@ void evt_msgpipe_read(evt_info_t* ei, uint32_t id, uint32_t otherid,
 
     objinfo_t* oi = find_object(ei->tid, KTHREAD);
     if (oi) {
-        track_add_event(oi->track, ei->ts, TAG_MSGPIPE_READ);
+        track_add_event(oi->track, ei->ts, EVT_MSGPIPE_READ);
     }
 #if 0
     // if we can find the other half, finish a flow event
@@ -386,15 +388,31 @@ void evt_msgpipe_read(evt_info_t* ei, uint32_t id, uint32_t otherid,
 void evt_port_create(evt_info_t* ei, uint32_t id) {
 }
 void evt_port_wait(evt_info_t* ei, uint32_t id) {
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, EVT_PORT_WAIT);
+    }
 }
 void evt_port_wait_done(evt_info_t* ei, uint32_t id) {
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, EVT_PORT_WAITED);
+    }
 }
 void evt_port_delete(evt_info_t* ei, uint32_t id) {
 }
 
 void evt_wait_one(evt_info_t* ei, uint32_t id, uint32_t signals, uint64_t timeout) {
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, EVT_HANDLE_WAIT);
+    }
 }
 void evt_wait_one_done(evt_info_t* ei, uint32_t id, uint32_t pending, uint32_t status) {
+    objinfo_t* oi = find_object(ei->tid, KTHREAD);
+    if (oi) {
+        track_add_event(oi->track, ei->ts, EVT_HANDLE_WAITED);
+    }
 }
 
 typedef struct {
