@@ -20,23 +20,19 @@ static int key_d;
 static int key_q;
 static int key_e;
 
-group_t* groups;
+tv::Trace TheTrace;
 
-void add_groups(group_t* list) {
-    groups = list;
-}
-
-void adjust_tracks(void) {
+void adjust_tracks(tv::group_t* groups) {
     int64_t tszero = 0x7FFFFFFFFFFFFFFFUL;
-    for (group_t* g = groups; g != NULL; g = g->next) {
-        for (track_t* t = g->first; t != NULL; t = t->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
             if (t->task[1].ts < tszero) {
                 tszero = t->task[1].ts;
             }
         }
     }
-    for (group_t* g = groups; g != NULL; g = g->next) {
-        for (track_t* t = g->first; t != NULL; t = t->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
             for (unsigned n = 1; n < t->taskcount; n++) {
                 t->task[n].ts -= tszero;
             }
@@ -112,7 +108,8 @@ void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, 0), pos + ImVec2(size.x/2.0, size.y), col);
 }
 
-void TraceView(ImVec2 origin, ImVec2 content) {
+void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
+    tv::group_t* groups = trace.get_groups();
     auto fg = ImColor(0,0,0);
     auto grid = ImColor(100,100,100);
     auto dl = ImGui::GetWindowDrawList();
@@ -215,7 +212,7 @@ void TraceView(ImVec2 origin, ImVec2 content) {
     // Draw Group Names and Bars
     pos = origin + ImVec2(0, H_RULER);
     size = content;
-    for (group_t* g = groups; g != NULL; g = g->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
         dl->AddLine(pos, pos + ImVec2(size.x - 1, 1), ImColor(220,220,220));
         dl->AddRectFilled(pos + ImVec2(0, 1),  pos + ImVec2(size.x - 1, H_GROUP - 2),
                           ImColor(180,180,180));
@@ -236,7 +233,7 @@ void TraceView(ImVec2 origin, ImVec2 content) {
         if (g->flags & GRP_FOLDED) {
             continue;
         }
-        for (track_t* t = g->first; t != NULL; t = t->next) {
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
             pos += ImVec2(0, H_TRACE);
         }
     }
@@ -245,12 +242,12 @@ void TraceView(ImVec2 origin, ImVec2 content) {
     pos = origin + ImVec2(5, H_RULER);
     size = content;
     ImGui::PushClipRect(pos, pos + ImVec2(W_NAMES, size.y), false);
-    for (group_t* g = groups; g != NULL; g = g->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
-        for (track_t* t = g->first; t != NULL; t = t->next) {
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
             dl->AddText(pos, fg, t->name, NULL);
             pos += ImVec2(0, H_TRACE);
         }
@@ -266,14 +263,14 @@ void TraceView(ImVec2 origin, ImVec2 content) {
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
     ImGui::PushClipRect(pos + ImVec2(1,0), pos + size - ImVec2(1,0), false);
-    for (group_t* g = groups; g != NULL; g = g->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
-        for (track_t* t = g->first; t != NULL; t = t->next) {
-            taskstate_t* task = t->task + 1;
-            taskstate_t* end = t->task + t->taskcount - 1;
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
+            tv::taskstate_t* task = t->task + 1;
+            tv::taskstate_t* end = t->task + t->taskcount - 1;
 
             while (task < end) {
                 if (task->ts >= tsedge) {
@@ -329,14 +326,14 @@ void TraceView(ImVec2 origin, ImVec2 content) {
 
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
-    for (group_t* g = groups; g != NULL; g = g->next) {
+    for (tv::group_t* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
         }
-        for (track_t* t = g->first; t != NULL; t = t->next) {
-            event_t* e = t->event;
-            event_t* end = t->event + t->eventcount - 1;
+        for (tv::track_t* t = g->first; t != NULL; t = t->next) {
+            tv::event_t* e = t->event;
+            tv::event_t* end = t->event + t->eventcount - 1;
 
             ts = tsedge;
             int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
@@ -390,7 +387,7 @@ static bool show_color_editor = false;
 static bool show_metrics_window = false;
 
 int traceviz_main(int argc, char** argv) {
-    ktrace_main(argc, argv);
+    TheTrace.import(argc, argv);
 
     key_esc = ImGui::GetKeyIndex(ImGuiKey_Escape);
     key_w = ImGui::GetKeyIndex(ImGuiKey_W);
@@ -408,7 +405,7 @@ int traceviz_main(int argc, char** argv) {
     task_state_color[TS_SLEEPING] = ImColor(85,172,182);
     task_state_color[TS_DEAD] = ImColor(200,200,200);
 
-    adjust_tracks();
+    adjust_tracks(TheTrace.get_groups());
 
     for (unsigned n = 0; n <= TS_LAST; n++) {
         ImVec4 c = ImColor(task_state_color[n]);
@@ -467,7 +464,7 @@ int traceviz_render(void) {
     auto origin = ImGui::GetWindowPos();
     auto size = ImGui::GetContentRegionAvail();
     auto pos = ImGui::GetCursorPos() + origin;
-    TraceView(pos, size);
+    TraceView(TheTrace, pos, size);
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
