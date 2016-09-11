@@ -54,7 +54,7 @@ out/%.o: %.S Makefile
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 out/traceviz: $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(CXX) -static-libstdc++ -static-libgcc $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
 
 -include $(DEPS)
 
