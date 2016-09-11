@@ -7,8 +7,11 @@ IMGUI := third_party/imgui
 FLAGS := -MMD -g -Wall -Wformat
 FLAGS += -Isrc -I$(IMGUI)
 FLAGS += -DImDrawIdx=unsigned
+
+all: out/traceviz
+
 SRCS := src/traceviz.cpp src/ktrace.c
-SRCS += src/font-droid-sans.S
+SRCS += src/font-droid-sans.S src/font-symbols.S
 SRCS += $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp
 
 #SRCS += src/main-opengl3.cpp
@@ -35,6 +38,8 @@ CFLAGS := -std=c11 $(FLAGS)
 CXXFLAGS := -std=c++11 $(FLAGS)
 
 MKDIR = mkdir -p $(dir $@)
+
+out/src/font-symbols.o: src/symbols.ttf
 
 out/%.o: %.cpp Makefile
 	@$(MKDIR)
