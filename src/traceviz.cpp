@@ -195,6 +195,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     ImGui::PopClipRect();
 
     // Draw Group Names and Bars
+    // record y position of tracks
     pos = origin + ImVec2(0, H_RULER);
     size = content;
     for (Group* g = groups; g != NULL; g = g->next) {
@@ -214,12 +215,17 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                 g->flags ^= GRP_FOLDED;
             }
         }
-        pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
-            continue;
-        }
-        for (Track* t = g->first; t != NULL; t = t->next) {
-            pos += ImVec2(0, H_TRACE);
+            for (Track* t = g->first; t != NULL; t = t->next) {
+                t->y = pos.y;
+            }
+            pos += ImVec2(0, H_GROUP);
+        } else {
+            pos += ImVec2(0, H_GROUP);
+            for (Track* t = g->first; t != NULL; t = t->next) {
+                t->y = pos.y;
+                pos += ImVec2(0, H_TRACE);
+            }
         }
     }
 
@@ -307,8 +313,13 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     const ImFont::Glyph* gSQUARE = symbols->FindGlyph('E');
     const ImFont::Glyph* gDIAMOND = symbols->FindGlyph('F');
     const ImFont::Glyph* gCIRCLE = symbols->FindGlyph('G');
+#if 1
     const ImFont::Glyph* gSEND = symbols->FindGlyph('H');
     const ImFont::Glyph* gRECV = symbols->FindGlyph('I');
+#else
+    const ImFont::Glyph* gSEND = symbols->FindGlyph('K');
+    const ImFont::Glyph* gRECV = symbols->FindGlyph('J');
+#endif
 
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
@@ -322,43 +333,61 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             auto end = t->event.end();
 
             e = std::lower_bound(e, end, tsedge);
-            ts = tsedge;
             int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
             int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
 
-            while ((e != end) && (e->ts < tsend)) {
+            for (; (e != end) && (e->ts < tsend); e++) {
                 int64_t x = e->ts;
                 // convert to local coords
                 x = (x - tsedge) / tscale;
-                if (x > last_x) {
-                    const ImFont::Glyph* glyph;
-                    switch (e->tag) {
-                    case EVT_PORT_WAIT:
-                    case EVT_HANDLE_WAIT:
-                        glyph = gSQUARE;
-                        break;
-                    case EVT_PORT_WAITED:
-                    case EVT_HANDLE_WAITED:
-                        glyph = gRIGHT;
-                        break;
-                    case EVT_MSGPIPE_CREATE:
-                        glyph = gCIRCLE;
-                        break;
-                    case EVT_MSGPIPE_WRITE:
-                        glyph = gSEND;
-                        break;
-                    case EVT_MSGPIPE_READ:
-                        glyph = gRECV;
-                        break;
-                    default:
-                        glyph = gDIAMOND;
-                        break;
+                if (x < last_x) {
+                    continue;
+                }
+
+                if ((e->tag == EVT_MSGPIPE_READ) && (e->eventidx)) {
+                    Track* wrtrack = trace.get_track(e->trackidx);
+                    auto wrevent = wrtrack->event[e->eventidx];
+                    auto wrpos = ImVec2((wrevent.ts - tsedge) / (float)tscale, wrtrack->y);
+
+                    auto p0 = wrpos + ImVec2(pos.x + 8.0, 0);
+                    auto p1 = pos + ImVec2(x + 8.0, 0);
+                    if (p0.y < p1.y) {
+                        p0 += ImVec2(0, 16);
+                    } else {
+                        p1 += ImVec2(0, 16);
                     }
 
-                    symbols->RenderGlyph(dl, pos + ImVec2(x, -1.0), ImColor(0, 0, 220), glyph);
-                    last_x = x;
+                    float n = (p1.x - p0.x) / 2.0;
+                    dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
+
                 }
-                e++;
+                const ImFont::Glyph* glyph;
+                switch (e->tag) {
+                case EVT_PORT_WAIT:
+                case EVT_HANDLE_WAIT:
+                    glyph = gSQUARE;
+                    break;
+                case EVT_PORT_WAITED:
+                case EVT_HANDLE_WAITED:
+                    glyph = gRIGHT;
+                    break;
+                case EVT_MSGPIPE_CREATE:
+                    glyph = gCIRCLE;
+                    break;
+                case EVT_MSGPIPE_WRITE:
+                    glyph = gSEND;
+                    break;
+                case EVT_MSGPIPE_READ:
+                    glyph = gRECV;
+                    break;
+                default:
+                    glyph = gDIAMOND;
+                    break;
+                }
+                //if ((e->tag == EVT_MSGPIPE_WRITE) || (e->tag == EVT_MSGPIPE_READ))
+                symbols->RenderGlyph(dl, pos + ImVec2(x, -1.0), ImColor(0, 0, 220), glyph);
+                last_x = x;
+                e->x = x;
             }
             pos += ImVec2(0, H_TRACE);
         }

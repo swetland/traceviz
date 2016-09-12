@@ -59,6 +59,7 @@ void Trace::group_add_track(Group* group, Track* track) {
 Track* Trace::track_create(void) {
     Track* t = (Track*)calloc(1, sizeof(Track));
     t->name = "unknown";
+    add_track(t);
     return t;
 }
 
@@ -70,11 +71,13 @@ void Trace::track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu) {
     t->task.push_back(task);
 }
 
-void Trace::track_add_event(Track* t, uint64_t ts, uint32_t tag) {
+Event* Trace::track_add_event(Track* t, uint64_t ts, uint32_t tag) {
     Event event;
+    memset(&event, 0, sizeof(event));
     event.ts = ts;
     event.tag = tag;
     t->event.push_back(event);
+    return &t->event.back();
 }
 
 #define OBJBUCKET(id) fnv1a_tiny(id, HASHBITS)
@@ -308,40 +311,38 @@ void Trace::evt_msgpipe_create(uint64_t ts, Thread* t, uint32_t id, uint32_t oth
 void Trace::evt_msgpipe_delete(uint64_t ts, Thread* t, uint32_t id) {
 }
 void Trace::evt_msgpipe_write(uint64_t ts, Thread* t, uint32_t id, uint32_t bytes, uint32_t handles) {
-    track_add_event(t->track, ts, EVT_MSGPIPE_WRITE);
+    MsgPipe* pipe = find_msgpipe(id);
 
-#if 0
-    // if we can find the other half, start a flow event from
-    // here to there
-    Object* oi = find_object(id, KPIPE);
-    if (oi == NULL) return;
-    char xid[128];
-    sprintf(xid, "%x:%x:%x", id, otherid, oi->seq_src++);
-    json_rec(ei->ts, "s", "write", "msgpipe",
-             "id", xid,
-             "#pid", ei->pid,
-             "tid", tidstr,
-             NULL);
-#endif
+    Msg m;
+    m.trackidx = t->track->idx;
+    m.eventidx = t->track->event.size();
+
+    Event* evt = track_add_event(t->track, ts, EVT_MSGPIPE_WRITE);
+    evt->a = bytes;
+    evt->b = handles;
+
+    MsgPipe* other;
+    if ((other = pipe->other) != nullptr) {
+        if (other->msgs.size()) return;
+        //fprintf(stderr, "WR %p(%u,%u) -> %p %d\n", pipe, m.trackidx, m.eventidx, other, other->msgs.size());
+        other->msgs.push_back(m);
+    }
 }
 
 void Trace::evt_msgpipe_read(uint64_t ts, Thread* t, uint32_t id, uint32_t bytes, uint32_t handles) {
-    track_add_event(t->track, ts, EVT_MSGPIPE_READ);
+    MsgPipe* pipe = find_msgpipe(id);
+    Event* evt = track_add_event(t->track, ts, EVT_MSGPIPE_READ);
+    evt->a = bytes;
+    evt->b = handles;
 
-#if 0
-    // if we can find the other half, finish a flow event
-    // from there to here
-    Object* oi = find_object(otherid, KPIPE);
-    if (oi == NULL) return;
-    char xid[128];
-    sprintf(xid, "%x:%x:%x", otherid, id, oi->seq_dst++);
-    json_rec(ei->ts, "f", "read", "msgpipe",
-             "bp", "e",
-             "id", xid,
-             "#pid", ei->pid,
-             "tid", tidstr,
-             NULL);
-#endif
+    if (pipe->msgs.size()) {
+        MsgPipe* other = pipe->other;
+        auto msg = pipe->msgs.front();
+        //fprintf(stderr, "RD %p <- %p(%u,%u) %d\n", pipe, other, msg.trackidx, msg.eventidx, pipe->msgs.size());
+        evt->trackidx = msg.trackidx;
+        evt->eventidx = msg.eventidx;
+        pipe->msgs.pop_front();
+    }
 }
 
 void Trace::evt_port_create(uint64_t ts, Thread* t, uint32_t id) {

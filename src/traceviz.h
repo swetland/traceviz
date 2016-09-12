@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <vector>
+#include <deque>
 
 int traceviz_main(int argc, char** argv);
 int traceviz_render(void);
@@ -67,12 +68,12 @@ static inline bool operator<(const TaskState& task, int64_t ts) {
 struct Event {
     int64_t ts;
     uint16_t tag;
-    uint16_t reftrack;
-    uint32_t refevent;
+    uint16_t trackidx;
+    uint32_t eventidx;
     uint32_t a;
     uint32_t b;
     uint32_t c;
-    uint32_t d;
+    float x;
 };
 
 static inline bool operator<(const Event& event, int64_t ts) {
@@ -84,7 +85,8 @@ struct Track {
     std::vector<TaskState> task;
     std::vector<Event> event;
     const char* name;
-    uint16_t id;
+    uint16_t idx;
+    float y;
 };
 
 
@@ -132,9 +134,14 @@ struct Process : public Object {
     virtual Process* as_process() { return this; }
 };
 
+struct Msg {
+    uint16_t trackidx;
+    uint32_t eventidx;
+};
+
 struct MsgPipe : public Object {
     MsgPipe* other;
-
+    std::deque<Msg> msgs;
     MsgPipe(uint32_t id);
     virtual MsgPipe* as_msgpipe() { return this; }
 };
@@ -146,10 +153,19 @@ typedef struct ktrace_record ktrace_record_t;
 #define BUCKETS (1 << HASHBITS)
 
 struct Trace {
+    std::vector<Track*> tracks;
     Group* group_list;
     Group* group_last;
 
     Object *objhash[BUCKETS];
+
+    Track* get_track(unsigned n) {
+        return tracks[n];
+    }
+    void add_track(Track* track) {
+        track->idx = tracks.size();
+        tracks.push_back(track);
+    }
 
     int import(int argc, char** argv);
     int import(int fd);
@@ -191,7 +207,7 @@ struct Trace {
     void group_add_track(Group* group, Track* track);
     Track* track_create(void);
     static void track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu);
-    static void track_add_event(Track* t, uint64_t ts, uint32_t tag);
+    static Event* track_add_event(Track* t, uint64_t ts, uint32_t tag);
 
     void add_object(Object* object);
     void finish(uint64_t ts);
