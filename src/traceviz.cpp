@@ -93,11 +93,17 @@ void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
 static bool show_flow = true;
 static bool show_evts = true;
 
+static bool is_marking = false;
+static int64_t mark0_pos;
+static int64_t mark1_pos;
+
 void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     Group* groups = trace.get_groups();
+    auto red = ImColor(255,0,0);
     auto fg = ImColor(0,0,0);
     auto grid = ImColor(100,100,100);
     auto dl = ImGui::GetWindowDrawList();
+    ImGuiIO& io = ImGui::GetIO();
     float tick = 20.0;
 
     bool zoomed = false;
@@ -144,6 +150,11 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     if (ImGui::IsKeyPressed(KEY(E), false)) {
         show_evts = !show_evts;
     }
+    if (ImGui::IsKeyPressed(KEY(M), false)) {
+        if (!is_marking && (mark0_pos != mark1_pos)) {
+            tpos = mark0_pos;
+        }
+    }
     if (ImGui::IsKeyDown(KEY(A))) {
         tpos -= tscale * 5;
     }
@@ -159,18 +170,6 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     int64_t tsegment = 100 * tscale;
     int64_t tsedge = tpos;
 
-    if (ImGui::IsMouseDown(0) && ImGui::IsWindowFocused()) {
-        auto delta = ImGui::GetMouseDragDelta();
-        drag_offset = -delta.x * tscale;
-        tsedge += drag_offset;
-    }
-
-    // round down to prev segment
-    int64_t ts = (tsedge / tsegment) * tsegment;
-
-    // figure the adjustment to start of drawing in pixels
-    float adj = (tsedge - ts) / tscale;
-
     // Drawing Constants
 #define W_NAMES 200
 #define H_TICK  20
@@ -179,9 +178,55 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 #define H_GROUP 20
 #define H_TRACE 18
 
+    if (ImGui::IsMouseDown(0) && ImGui::IsWindowFocused()) {
+        if (io.KeyCtrl) {
+            ImVec2 pos = origin + ImVec2(W_NAMES, 0);
+            ImVec2 mouse = ImGui::GetMousePos();
+            if (!is_marking) {
+                is_marking = true;
+                mark0_pos = tsedge + (int64_t) ((mouse.x - pos.x) * tscale);
+            }
+            mark1_pos = tsedge + (int64_t) ((mouse.x - pos.x) * tscale);
+        } else if (io.KeyShift) {
+        } else if (io.KeyAlt) {
+        } else {
+            auto delta = ImGui::GetMouseDragDelta();
+            drag_offset = -delta.x * tscale;
+            tsedge += drag_offset;
+        }
+    } else {
+        if (is_marking) {
+            is_marking = false;
+        }
+    }
+
+    // round down to prev segment
+    int64_t ts = (tsedge / tsegment) * tsegment;
+
+    // figure the adjustment to start of drawing in pixels
+    float adj = (tsedge - ts) / tscale;
+
     // Draw Ruler and Grid
     ImVec2 pos = origin + ImVec2(W_NAMES, 0);
     ImVec2 size = content - ImVec2(W_NAMES, 0);
+
+    if (mark0_pos != mark1_pos) {
+        int64_t n = mark0_pos - mark1_pos;
+        char tmp[64];
+        if (n < 0) {
+            n = -n;
+        }
+        if (n > 1000000000L) {
+            sprintf(tmp, "[mark] %ld.%06ld s", n / 1000000000L, (n % 1000000000L) / 1000L);
+        } else if (n > 1000000) {
+            sprintf(tmp, "[mark] %ld.%06ld ms", n / 1000000L, n % 1000000L);
+        } else if (n > 1000) {
+            sprintf(tmp, "[mark] %ld.%03ld us", n / 1000L, n % 1000L);
+        } else {
+            sprintf(tmp, "[mark] %ld ns", n);
+        }
+        dl->AddText(ImVec2(10, origin.y + 3), red, tmp);
+    }
     if (size.x < 0) {
         return;
     }
@@ -401,6 +446,14 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         }
     }
 
+    if ((mark0_pos != mark1_pos) || is_marking) {
+        pos = origin + ImVec2(W_NAMES, H_RULER);
+        size = content - ImVec2(W_NAMES, 0);
+        float x0 = (mark0_pos - tsedge) / tscale;
+        float x1 = (mark1_pos - tsedge) / tscale;
+        dl->AddLine(ImVec2(pos.x + x0, pos.y), ImVec2(pos.x + x0, pos.y + size.y), red);
+        dl->AddLine(ImVec2(pos.x + x1, pos.y), ImVec2(pos.x + x1, pos.y + size.y), red);
+    }
     ImGui::PopClipRect();
 }
 
