@@ -12,13 +12,8 @@
 
 #include "traceviz.h"
 
-static int key_esc;
-static int key_w;
-static int key_a;
-static int key_s;
-static int key_d;
-static int key_q;
-static int key_e;
+static int keymap[ImGuiKey_COUNT];
+#define KEY(x) (keymap[ImGuiKey_##x])
 
 using tv::Trace;
 using tv::Group;
@@ -76,14 +71,13 @@ struct {
 };
 
 #define ZOOMMAX ((sizeof(zoom)/sizeof(zoom[0])) - 1)
-unsigned zoomno = 19;
-
-static int busy = 0;
+#define ZOOMDEF 19
+static unsigned zoomno = ZOOMDEF;
 
 static int64_t drag_offset = 0;
 static int64_t tpos = 0; // time at left edge
 
-ImFont* symbols;
+static ImFont* symbols;
 
 void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, size.y/2.0), pos + ImVec2(0, size.y), col);
@@ -92,6 +86,9 @@ void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
 void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, 0), pos + ImVec2(size.x/2.0, size.y), col);
 }
+
+static bool show_flow = true;
+static bool show_evts = true;
 
 void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     Group* groups = trace.get_groups();
@@ -102,23 +99,22 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 
     bool zoomed = false;
     int64_t oldscale = zoom[zoomno].scale;
-    if (busy) {
-        busy--;
-    } else {
-        if (ImGui::IsKeyDown(key_w)) {
-            if (zoomno > 0) {
-                zoomno--;
-            }
-            busy = 10;
-            zoomed = true;
+    if (ImGui::IsKeyPressed(KEY(W), false)) {
+        if (zoomno > 0) {
+            zoomno--;
         }
-        if (ImGui::IsKeyDown(key_s)) {
-            if (zoomno < ZOOMMAX) {
-                zoomno++;
-            }
-            busy = 10;
-            zoomed = true;
+        zoomed = true;
+    }
+    if (ImGui::IsKeyPressed(KEY(S), false)) {
+        if (zoomno < ZOOMMAX) {
+            zoomno++;
         }
+        zoomed = true;
+    }
+
+    if (ImGui::IsKeyPressed(KEY(0), false)) {
+        zoomno = ZOOMDEF;
+        tpos = 0;
     }
 
     // tscale: nanoseconds per horizontal pixel
@@ -136,10 +132,19 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         }
     }
 
-    if (ImGui::IsKeyDown(key_a)) {
+    if (ImGui::IsKeyPressed(KEY(F), false)) {
+        show_flow = !show_flow;
+        if (show_flow) {
+            show_evts = true;
+        }
+    }
+    if (ImGui::IsKeyPressed(KEY(E), false)) {
+        show_evts = !show_evts;
+    }
+    if (ImGui::IsKeyDown(KEY(A))) {
         tpos -= tscale * 5;
     }
-    if (ImGui::IsKeyDown(key_d)) {
+    if (ImGui::IsKeyDown(KEY(D))) {
         tpos += tscale * 5;
     }
 
@@ -323,7 +328,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
-    for (Group* g = groups; g != NULL; g = g->next) {
+    if (show_evts) for (Group* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
@@ -344,7 +349,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     continue;
                 }
 
-                if ((e->tag == EVT_MSGPIPE_READ) && (e->eventidx)) {
+                if (show_flow && (e->tag == EVT_MSGPIPE_READ) && (e->eventidx)) {
                     Track* wrtrack = trace.get_track(e->trackidx);
                     auto wrevent = wrtrack->event[e->eventidx];
                     auto wrpos = ImVec2((wrevent.ts - tsedge) / (float)tscale, wrtrack->y);
@@ -402,13 +407,9 @@ static bool show_metrics_window = false;
 int traceviz_main(int argc, char** argv) {
     TheTrace.import(argc, argv);
 
-    key_esc = ImGui::GetKeyIndex(ImGuiKey_Escape);
-    key_w = ImGui::GetKeyIndex(ImGuiKey_W);
-    key_a = ImGui::GetKeyIndex(ImGuiKey_A);
-    key_s = ImGui::GetKeyIndex(ImGuiKey_S);
-    key_d = ImGui::GetKeyIndex(ImGuiKey_D);
-    key_q = ImGui::GetKeyIndex(ImGuiKey_Q);
-    key_e = ImGui::GetKeyIndex(ImGuiKey_A);
+    for (unsigned n = 0; n < ImGuiKey_COUNT; n++) {
+        keymap[n] = ImGui::GetKeyIndex(n);
+    }
 
     task_state_color[TS_NONE] = ImColor(200,200,200);
     task_state_color[TS_SUSPENDED] = ImColor(100,100,100);
@@ -452,7 +453,7 @@ int traceviz_main(int argc, char** argv) {
 }
 
 int traceviz_render(void) {
-    if (ImGui::IsKeyDown(key_esc)) {
+    if (ImGui::IsKeyDown(KEY(Escape))) {
         return -1;
     }
 
