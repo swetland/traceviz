@@ -59,35 +59,22 @@ void Trace::group_add_track(Group* group, Track* track) {
 Track* Trace::track_create(void) {
     Track* t = (Track*)calloc(1, sizeof(Track));
     t->name = "unknown";
-    t->tasksize = 128;
-    t->taskcount = 1;
-    t->task = (TaskState*)malloc(sizeof(TaskState) * t->tasksize);
-    t->task[0].ts = 0;
-    t->task[0].state = TS_NONE;
-    t->eventsize = 128;
-    t->eventcount = 0;
-    t->event = (Event*)malloc(sizeof(Event) * t->eventsize);
     return t;
 }
 
 void Trace::track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu) {
-    if (t->taskcount == t->tasksize) {
-        t->tasksize *= 2;
-        t->task = (TaskState*)realloc(t->task, sizeof(TaskState) * t->tasksize);
-    }
-    t->task[t->taskcount].ts = ts;
-    t->task[t->taskcount].state = state;
-    t->task[t->taskcount].cpu = cpu;
-    t->taskcount++;
+    TaskState task;
+    task.ts = ts;
+    task.state = state;
+    task.cpu = cpu;
+    t->task.push_back(task);
 }
 
 void Trace::track_add_event(Track* t, uint64_t ts, uint32_t tag) {
-    if (t->eventcount == t->eventsize) {
-        t->eventsize *= 2;
-        t->event = (Event*)realloc(t->event, sizeof(Event) * t->eventsize);
-    }
-    t->event[t->eventcount].ts = ts;
-    t->event[t->eventcount++].tag = tag;
+    Event event;
+    event.ts = ts;
+    event.tag = tag;
+    t->event.push_back(event);
 }
 
 #define OBJBUCKET(id) fnv1a_tiny(id, HASHBITS)
@@ -557,6 +544,27 @@ void Trace::import_regular(ktrace_record_t& rec, uint64_t ts, uint32_t tag) {
 static int show_stats = 0;
 static unsigned limit = 0xFFFFFFFF;
 
+void adjust_tracks(Group* groups) {
+    int64_t tszero = 0x7FFFFFFFFFFFFFFFUL;
+    for (Group* g = groups; g != NULL; g = g->next) {
+        for (Track* t = g->first; t != NULL; t = t->next) {
+            if (t->task[1].ts < tszero) {
+                tszero = t->task[1].ts;
+            }
+        }
+    }
+    for (Group* g = groups; g != NULL; g = g->next) {
+        for (Track* t = g->first; t != NULL; t = t->next) {
+            for (auto& task : t->task) {
+                task.ts -= tszero;
+            }
+            for (auto& event : t->event) {
+                event.ts -= tszero;
+            }
+        }
+    }
+}
+
 int Trace::import(int fd) {
     ktrace_record_t rec;
     unsigned offset = 0;
@@ -587,6 +595,7 @@ int Trace::import(int fd) {
     if (s.events) {
         s.ts_last = ts;
         finish(ts);
+        adjust_tracks(group_list);
     }
 
     if (show_stats) {

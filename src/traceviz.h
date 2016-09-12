@@ -7,6 +7,8 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include <vector>
+
 int traceviz_main(int argc, char** argv);
 int traceviz_render(void);
 
@@ -52,23 +54,15 @@ struct Group {
 
 #define GRP_FOLDED 1
 
-struct Track {
-    Track* next;
-    TaskState* task;
-    Event* event;
-    const char* name;
-    unsigned taskcount;
-    unsigned tasksize;
-    unsigned eventcount;
-    unsigned eventsize;
-    uint16_t id;
-};
-
 struct TaskState {
     int64_t ts;
     uint8_t state;
     uint8_t cpu;
 };
+
+static inline bool operator<(const TaskState& task, int64_t ts) {
+    return task.ts < ts;
+}
 
 struct Event {
     int64_t ts;
@@ -80,6 +74,19 @@ struct Event {
     uint32_t c;
     uint32_t d;
 };
+
+static inline bool operator<(const Event& event, int64_t ts) {
+    return event.ts < ts;
+}
+
+struct Track {
+    Track* next;
+    std::vector<TaskState> task;
+    std::vector<Event> event;
+    const char* name;
+    uint16_t id;
+};
+
 
 static_assert(sizeof(Event) == 32, "sizeof(Event) != 32");
 

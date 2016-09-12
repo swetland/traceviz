@@ -28,27 +28,6 @@ using tv::TaskState;
 
 Trace TheTrace;
 
-void adjust_tracks(Group* groups) {
-    int64_t tszero = 0x7FFFFFFFFFFFFFFFUL;
-    for (Group* g = groups; g != NULL; g = g->next) {
-        for (Track* t = g->first; t != NULL; t = t->next) {
-            if (t->task[1].ts < tszero) {
-                tszero = t->task[1].ts;
-            }
-        }
-    }
-    for (Group* g = groups; g != NULL; g = g->next) {
-        for (Track* t = g->first; t != NULL; t = t->next) {
-            for (unsigned n = 1; n < t->taskcount; n++) {
-                t->task[n].ts -= tszero;
-            }
-            for (unsigned n = 0; n < t->eventcount; n++) {
-                t->event[n].ts -= tszero;
-            }
-        }
-    }
-}
-
 static ImU32 task_state_color[TS_LAST + 1];
 
 static const char *task_state_name[TS_LAST + 1] = {
@@ -275,26 +254,27 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             continue;
         }
         for (Track* t = g->first; t != NULL; t = t->next) {
-            TaskState* task = t->task + 1;
-            TaskState* end = t->task + t->taskcount - 1;
+            auto task = t->task.begin();
+            auto end = t->task.end();
 
-            while (task < end) {
-                if (task->ts >= tsedge) {
-                    break;
-                }
-                task++;
-            }
-            task--;
+            // find the event before the left edge
+            ++task;
+            task = std::lower_bound(task, end, tsedge);
+            --task;
 
             ts = tsedge;
             int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
             int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
 
-            while ((task < end) && (task->ts < tsend)) {
-                task++;
-                int64_t x0 = task[-1].ts;
-                int64_t x1 = task[0].ts;
-                auto color = task_state_color[task[-1].state];
+            while ((task != end) && (task->ts < tsend)) {
+                int64_t x0 = task->ts;
+                uint8_t state = task->state;
+                uint8_t cpuid = task->cpu;
+
+                if (++task == end) {
+                    break;
+                }
+                int64_t x1 = task->ts;
                 if (x0 < tsedge) {
                     x0 = tsedge;
                 }
@@ -307,12 +287,12 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                 x1 = (x1 - tsedge) / tscale;
 
                 if (x1 > last_x) {
+                    auto color = task_state_color[state];
                     dl->AddRectFilled(pos + ImVec2(x0, 0), pos + ImVec2(x1, H_TRACE - 2), color);
-                    if ((task[-1].state == TS_RUNNING) && ((x1 - x0) > 50)) {
-                        cpu[3] = '0' + task[-1].cpu;
+                    if ((state == TS_RUNNING) && ((x1 - x0) > 50)) {
+                        cpu[3] = '0' + cpuid;
                         dl->AddText(pos + ImVec2(x0 + 10, -2.0), fg, cpu);
                     }
-
                     last_x = x1;
                 }
             }
@@ -338,19 +318,16 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             continue;
         }
         for (Track* t = g->first; t != NULL; t = t->next) {
-            Event* e = t->event;
-            Event* end = t->event + t->eventcount - 1;
+            auto e = t->event.begin();
+            auto end = t->event.end();
 
+            e = std::lower_bound(e, end, tsedge);
             ts = tsedge;
             int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
             int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
 
-            while ((e < end) && (e->ts < tsend)) {
-                e++;
+            while ((e != end) && (e->ts < tsend)) {
                 int64_t x = e->ts;
-                if (x < tsedge) {
-                    continue;
-                }
                 // convert to local coords
                 x = (x - tsedge) / tscale;
                 if (x > last_x) {
@@ -381,6 +358,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     symbols->RenderGlyph(dl, pos + ImVec2(x, -1.0), ImColor(0, 0, 220), glyph);
                     last_x = x;
                 }
+                e++;
             }
             pos += ImVec2(0, H_TRACE);
         }
@@ -410,8 +388,6 @@ int traceviz_main(int argc, char** argv) {
     task_state_color[TS_BLOCKED] = ImColor(164,153,100);
     task_state_color[TS_SLEEPING] = ImColor(85,172,182);
     task_state_color[TS_DEAD] = ImColor(200,200,200);
-
-    adjust_tracks(TheTrace.get_groups());
 
     for (unsigned n = 0; n <= TS_LAST; n++) {
         ImVec4 c = ImColor(task_state_color[n]);
