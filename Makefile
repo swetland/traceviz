@@ -24,9 +24,17 @@ SRCS += $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp
 SRCS += src/main-opengl3-sdl.cpp
 SRCS += $(IMGUI)/examples/sdl_opengl3_example/imgui_impl_sdl_gl3.cpp
 SRCS += $(IMGUI)/examples/libs/gl3w/GL/gl3w.cpp
-LIBS := `sdl2-config --libs` -lGL -ldl
+LIBS := `sdl2-config --libs`
 FLAGS += -I$(IMGUI)/examples/libs/gl3w -I$(IMGUI)/examples/sdl_opengl3_example
 FLAGS += `sdl2-config --cflags`
+
+UNAME := $(shell uname -s)
+ifeq ($(UNAME),Linux)
+LIBS += -lGL -ldl
+endif
+ifeq ($(UNAME),Darwin)
+LIBS += -framework OpenGl -framework CoreFoundation
+endif
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SRCS))))
 OBJS := $(patsubst %,out/%,$(OBJS))
