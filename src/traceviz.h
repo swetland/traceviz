@@ -37,18 +37,40 @@ namespace tv {
 #define TS_NONE 6
 #define TS_LAST TS_NONE
 
-typedef struct group group_t;
-typedef struct track track_t;
-typedef struct event event_t;
-typedef struct taskstate taskstate_t;
+struct Group;
+struct Track;
+struct Event;
+struct TaskState;
 
-struct taskstate {
+struct Group {
+    Group* next;
+    Track* first;
+    Track* last;
+    const char* name;
+    uint32_t flags;
+};
+
+#define GRP_FOLDED 1
+
+struct Track {
+    Track* next;
+    TaskState* task;
+    Event* event;
+    const char* name;
+    unsigned taskcount;
+    unsigned tasksize;
+    unsigned eventcount;
+    unsigned eventsize;
+    uint16_t id;
+};
+
+struct TaskState {
     int64_t ts;
     uint8_t state;
     uint8_t cpu;
 };
 
-struct event {
+struct Event {
     int64_t ts;
     uint16_t tag;
     uint16_t reftrack;
@@ -59,30 +81,7 @@ struct event {
     uint32_t d;
 };
 
-static_assert(sizeof(event_t) == 32, "sizeof(event_t) != 32");
-
-struct group {
-    group_t* next;
-    track_t* first;
-    track_t* last;
-    const char* name;
-    uint32_t flags;
-};
-
-#define GRP_FOLDED 1
-
-struct track {
-    track_t* next;
-    taskstate_t* task;
-    event_t* event;
-    const char* name;
-    unsigned taskcount;
-    unsigned tasksize;
-    unsigned eventcount;
-    unsigned eventsize;
-};
-
-void add_groups(group_t* list);
+static_assert(sizeof(Event) == 32, "sizeof(Event) != 32");
 
 #define KPROC    1 // extra = 0
 #define KTHREAD  2 // extra = pid
@@ -112,7 +111,7 @@ enum {
 };
 
 struct Thread : public Object {
-    track_t* track;
+    Track* track;
 
     Thread(uint32_t id);
     virtual Thread* as_thread() { return this; }
@@ -120,7 +119,7 @@ struct Thread : public Object {
 };
 
 struct Process : public Object {
-    group_t* group;
+    Group* group;
 
     Process(uint32_t id);
     virtual Process* as_process() { return this; }
@@ -140,7 +139,8 @@ typedef struct ktrace_record ktrace_record_t;
 #define BUCKETS (1 << HASHBITS)
 
 struct Trace {
-    group_t* groups;
+    Group* group_list;
+    Group* group_last;
 
     Object *objhash[BUCKETS];
 
@@ -171,14 +171,20 @@ struct Trace {
     void evt_wait_one(uint64_t ts, Thread* t, uint32_t id, uint32_t signals, uint64_t timeout);
     void evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pending, uint32_t status);
 
-    group_t* get_groups(void) {
-        return groups;
+    Group* get_groups(void) {
+        return group_list;
     }
 
     Object* find_object(uint32_t id, uint32_t kind);
     Process* find_process(uint32_t id, bool create = true);
     Thread* find_thread(uint32_t id, bool create = true);
     MsgPipe* find_msgpipe(uint32_t id, bool create = true);
+
+    Group* group_create(void);
+    void group_add_track(Group* group, Track* track);
+    Track* track_create(void);
+    static void track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu);
+    static void track_add_event(Track* t, uint64_t ts, uint32_t tag);
 
     void add_object(Object* object);
     void finish(uint64_t ts);

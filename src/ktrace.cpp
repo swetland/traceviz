@@ -32,12 +32,11 @@ static inline uint32_t fnv1a_tiny(uint32_t n, uint32_t bits) {
     return ((hash >> bits) ^ hash) & ((1 << bits) - 1);
 }
 
-group_t* group_list;
-group_t* group_last;
-group_t* group_kernel;
+Group* group_kernel;
 
-group_t* group_create(void) {
-    group_t* g = (group_t*)calloc(1, sizeof(group_t));
+Group* Trace::group_create(void) {
+    Group* g = (Group*)calloc(1, sizeof(Group));
+    g->name = "unknown";
     if (group_last) {
         group_last->next = g;
     } else {
@@ -47,7 +46,7 @@ group_t* group_create(void) {
     return g;
 }
 
-void group_add_track(group_t* group, track_t* track) {
+void Trace::group_add_track(Group* group, Track* track) {
     track->next = nullptr;
     if (group->last) {
         group->last->next = track;
@@ -57,23 +56,24 @@ void group_add_track(group_t* group, track_t* track) {
     group->last = track;
 }
 
-track_t* track_create(void) {
-    track_t* t = (track_t*)calloc(1, sizeof(track_t));
+Track* Trace::track_create(void) {
+    Track* t = (Track*)calloc(1, sizeof(Track));
+    t->name = "unknown";
     t->tasksize = 128;
     t->taskcount = 1;
-    t->task = (taskstate_t*)malloc(sizeof(taskstate_t) * t->tasksize);
+    t->task = (TaskState*)malloc(sizeof(TaskState) * t->tasksize);
     t->task[0].ts = 0;
     t->task[0].state = TS_NONE;
     t->eventsize = 128;
     t->eventcount = 0;
-    t->event = (event_t*)malloc(sizeof(event_t) * t->eventsize);
+    t->event = (Event*)malloc(sizeof(Event) * t->eventsize);
     return t;
 }
 
-void track_append(track_t* t, uint64_t ts, uint8_t state, uint8_t cpu) {
+void Trace::track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu) {
     if (t->taskcount == t->tasksize) {
         t->tasksize *= 2;
-        t->task = (taskstate_t*)realloc(t->task, sizeof(taskstate_t) * t->tasksize);
+        t->task = (TaskState*)realloc(t->task, sizeof(TaskState) * t->tasksize);
     }
     t->task[t->taskcount].ts = ts;
     t->task[t->taskcount].state = state;
@@ -81,10 +81,10 @@ void track_append(track_t* t, uint64_t ts, uint8_t state, uint8_t cpu) {
     t->taskcount++;
 }
 
-void track_add_event(track_t* t, uint64_t ts, uint32_t tag) {
+void Trace::track_add_event(Track* t, uint64_t ts, uint32_t tag) {
     if (t->eventcount == t->eventsize) {
         t->eventsize *= 2;
-        t->event = (event_t*)realloc(t->event, sizeof(event_t) * t->eventsize);
+        t->event = (Event*)realloc(t->event, sizeof(Event) * t->eventsize);
     }
     t->event[t->eventcount].ts = ts;
     t->event[t->eventcount++].tag = tag;
@@ -120,21 +120,13 @@ Object::Object(uint32_t _id, uint32_t _kind) : id(_id), kind(_kind), flags(0) {
 };
 
 Thread::Thread(uint32_t _id) : Object(_id, KTHREAD) {
-    track = track_create();
-    char tmp[64];
-    sprintf(tmp, "thread %08x", _id);
-    track->name = strdup(tmp);
 }
 
 void Thread::finish(uint64_t ts) {
-    track_append(track, ts, TS_NONE, 0);
+    Trace::track_append(track, ts, TS_NONE, 0);
 }
 
 Process::Process(uint32_t _id) : Object(_id, KPROC) {
-    group = group_create();
-    char tmp[64];
-    sprintf(tmp, "process %08x", _id);
-    group->name = strdup(tmp);
 }
 
 MsgPipe::MsgPipe(uint32_t _id) : Object(_id, KPIPE) {
@@ -153,6 +145,7 @@ Process* Trace::find_process(uint32_t id, bool create) {
     }
     if (create) {
         Process* p = new Process(id);
+        p->group = group_create();
         add_object(p);
         return p;
     }
@@ -166,6 +159,7 @@ Thread* Trace::find_thread(uint32_t id, bool create) {
     }
     if (create) {
         Thread* t = new Thread(id);
+        t->track = track_create();
         add_object(t);
         return t;
     }
@@ -590,7 +584,6 @@ int Trace::import(int fd) {
             import_special(rec, tag);
         }
     }
-    groups = group_list;
     if (s.events) {
         s.ts_last = ts;
         finish(ts);
