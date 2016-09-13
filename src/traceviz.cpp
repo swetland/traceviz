@@ -178,10 +178,10 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 #define H_GROUP 20
 #define H_TRACE 18
 
+    ImVec2 mouse = ImGui::GetMousePos();
     if (ImGui::IsMouseDown(0) && ImGui::IsWindowFocused()) {
         if (io.KeyCtrl) {
             ImVec2 pos = origin + ImVec2(W_NAMES, 0);
-            ImVec2 mouse = ImGui::GetMousePos();
             if (!is_marking) {
                 is_marking = true;
                 mark0_pos = tsedge + (int64_t) ((mouse.x - pos.x) * tscale);
@@ -298,6 +298,9 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
     ImGui::PopClipRect();
 
+    int64_t snap_ts = 0;
+    float snap_dist = 10000000.0;
+
     char cpu[5];
     cpu[0] = 'c';
     cpu[1] = 'p';
@@ -326,24 +329,32 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
 
             while ((task != end) && (task->ts < tsend)) {
-                int64_t x0 = task->ts;
+                int64_t ts0 = task->ts;
                 uint8_t state = task->state;
                 uint8_t cpuid = task->cpu;
 
                 if (++task == end) {
                     break;
                 }
-                int64_t x1 = task->ts;
-                if (x0 < tsedge) {
-                    x0 = tsedge;
+                int64_t ts1 = task->ts;
+                if (ts0 < tsedge) {
+                    ts0 = tsedge;
                 }
-                if (x1 > tsend) {
-                    x1 = tsend;
+                if (ts1 > tsend) {
+                    ts1 = tsend;
                 }
 
                 // convert to local coords
-                x0 = (x0 - tsedge) / tscale;
-                x1 = (x1 - tsedge) / tscale;
+                float x0 = (ts0 - tsedge) / tscale;
+                float x1 = (ts1 - tsedge) / tscale;
+
+                if (is_marking) {
+                    float dist = fabs((mouse.x - pos.x) - x0);
+                    if (dist < snap_dist) {
+                        snap_dist = dist;
+                        snap_ts = ts0;
+                    }
+                }
 
                 if (x1 > last_x) {
                     auto color = task_state_color[state];
@@ -447,6 +458,9 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
 
     if ((mark0_pos != mark1_pos) || is_marking) {
+        if (snap_dist < 8.0) {
+            mark1_pos = snap_ts;
+        }
         pos = origin + ImVec2(W_NAMES, H_RULER);
         size = content - ImVec2(W_NAMES, 0);
         float x0 = (mark0_pos - tsedge) / tscale;
