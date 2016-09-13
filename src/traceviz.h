@@ -13,19 +13,10 @@
 int traceviz_main(int argc, char** argv);
 int traceviz_render(void);
 
+#define DEF_EVENT(name,n,s) EVT_##name = n,
 enum {
-    EVT_NONE,
-    EVT_THREAD_START,
-    EVT_THREAD_STOP,
-    EVT_MSGPIPE_CREATE,
-    EVT_MSGPIPE_WRITE,
-    EVT_MSGPIPE_READ,
-    EVT_PORT_WAIT,
-    EVT_PORT_WAITED,
-    EVT_HANDLE_WAIT,
-    EVT_HANDLE_WAITED,
+#include "events.h"
 };
-
 
 namespace tv {
 
@@ -73,7 +64,7 @@ struct Event {
     uint32_t a;
     uint32_t b;
     uint32_t c;
-    float x;
+    uint32_t d;
 };
 
 static inline bool operator<(const Event& event, int64_t ts) {

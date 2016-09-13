@@ -23,6 +23,23 @@ using tv::TaskState;
 
 Trace TheTrace;
 
+#define DEF_EVENT(name,n,s) s,
+const char* evtname[] = {
+#include "events.h"
+};
+
+void EventTooltip(Event* evt) {
+    switch (evt->tag) {
+    case EVT_MSGPIPE_READ:
+    case EVT_MSGPIPE_WRITE:
+        ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u", evtname[evt->tag], evt->a, evt->b);
+        break;
+    default:
+        ImGui::SetTooltip("%s", evtname[evt->tag]);
+        break;
+    }
+}
+
 static ImU32 task_state_color[TS_LAST + 1];
 
 static const char *task_state_name[TS_LAST + 1] = {
@@ -81,6 +98,12 @@ static int64_t drag_offset = 0;
 static int64_t tpos = 0; // time at left edge
 
 static ImFont* symbols;
+
+static inline float distish(const ImVec2& a, const ImVec2& b) {
+    float dx = a.x - b.x;
+    float dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
 
 void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, size.y/2.0), pos + ImVec2(0, size.y), col);
@@ -385,9 +408,11 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     const ImFont::Glyph* gRECV = symbols->FindGlyph('J');
 #endif
 
+    Event* tt_evt;
+    float tt_dist = 1000000000.0;
     pos = origin + ImVec2(W_NAMES, H_RULER);
     size = content - ImVec2(W_NAMES, 0);
-    if (show_evts) for (Group* g = groups; g != NULL; g = g->next) {
+    for (Group* g = groups; g != NULL; g = g->next) {
         pos += ImVec2(0, H_GROUP);
         if (g->flags & GRP_FOLDED) {
             continue;
@@ -425,36 +450,46 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
 
                 }
-                const ImFont::Glyph* glyph;
-                switch (e->tag) {
-                case EVT_PORT_WAIT:
-                case EVT_HANDLE_WAIT:
-                    glyph = gSQUARE;
-                    break;
-                case EVT_PORT_WAITED:
-                case EVT_HANDLE_WAITED:
-                    glyph = gRIGHT;
-                    break;
-                case EVT_MSGPIPE_CREATE:
-                    glyph = gCIRCLE;
-                    break;
-                case EVT_MSGPIPE_WRITE:
-                    glyph = gSEND;
-                    break;
-                case EVT_MSGPIPE_READ:
-                    glyph = gRECV;
-                    break;
-                default:
-                    glyph = gDIAMOND;
-                    break;
+                if (show_evts) {
+                    auto gpos = pos + ImVec2(x, -1.0);
+                    float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
+                    if (d < tt_dist) {
+                        tt_dist = d;
+                        tt_evt = &(*e);
+                    }
+                    const ImFont::Glyph* glyph;
+                    switch (e->tag) {
+                    case EVT_PORT_WAIT:
+                    case EVT_HANDLE_WAIT:
+                        glyph = gSQUARE;
+                        break;
+                    case EVT_PORT_WAITED:
+                    case EVT_HANDLE_WAITED:
+                        glyph = gRIGHT;
+                        break;
+                    case EVT_MSGPIPE_CREATE:
+                        glyph = gCIRCLE;
+                        break;
+                    case EVT_MSGPIPE_WRITE:
+                        glyph = gSEND;
+                        break;
+                    case EVT_MSGPIPE_READ:
+                        glyph = gRECV;
+                        break;
+                    default:
+                        glyph = gDIAMOND;
+                        break;
+                    }
+                    symbols->RenderGlyph(dl, gpos, ImColor(0, 0, 220), glyph);
                 }
-                //if ((e->tag == EVT_MSGPIPE_WRITE) || (e->tag == EVT_MSGPIPE_READ))
-                symbols->RenderGlyph(dl, pos + ImVec2(x, -1.0), ImColor(0, 0, 220), glyph);
                 last_x = x;
-                e->x = x;
             }
             pos += ImVec2(0, H_TRACE);
         }
+    }
+
+    if (show_evts && (sqrtf(tt_dist) < 12.0)) {
+        EventTooltip(tt_evt);
     }
 
     if ((mark0_pos != mark1_pos) || is_marking) {
