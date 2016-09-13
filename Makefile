@@ -30,7 +30,7 @@ FLAGS += `sdl2-config --cflags`
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Linux)
-LIBS += -lGL -ldl
+LIBS += -lGL -ldl -static-libstdc++ -static-libgcc
 endif
 ifeq ($(UNAME),Darwin)
 LIBS += -framework OpenGl -framework CoreFoundation
@@ -62,7 +62,7 @@ out/%.o: %.S Makefile
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 out/traceviz: $(OBJS)
-	$(CXX) -static-libstdc++ -static-libgcc $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
 
 -include $(DEPS)
 
