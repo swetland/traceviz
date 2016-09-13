@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-.global font_symbols
-.global size_symbols
+#include "asm.h"
+
+.global SYM(font_symbols)
+.global SYM(size_symbols)
 
 .align 4
-font_symbols:
+SYM(font_symbols):
 .incbin "symbols.ttf"
-font_symbols_end:
+SYM(font_symbols_end):
 
 .align 4
-size_symbols:
-.int font_symbols_end - font_symbols
+SYM(size_symbols):
+.int SYM(font_symbols_end) - SYM(font_symbols)
 
