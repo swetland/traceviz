@@ -23,19 +23,24 @@ using tv::TaskState;
 
 Trace TheTrace;
 
-#define DEF_EVENT(name,n,s) s,
-const char* evtname[] = {
-#include "events.h"
+#define KTRACE_DEF(num,type,name,group) case num: return #name;
+
+const char* evtname(uint32_t evt) {
+    switch (evt) {
+#include "ktrace-def.h"
+    default: return "???";
+    }
 };
 
 void EventTooltip(Event* evt) {
     switch (evt->tag) {
     case EVT_MSGPIPE_READ:
     case EVT_MSGPIPE_WRITE:
-        ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u", evtname[evt->tag], evt->a, evt->b);
+        ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u",
+                          evtname(evt->tag), evt->a, evt->b);
         break;
     default:
-        ImGui::SetTooltip("%s", evtname[evt->tag]);
+        ImGui::SetTooltip("%s", evtname(evt->tag));
         break;
     }
 }
@@ -460,11 +465,11 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     const ImFont::Glyph* glyph;
                     switch (e->tag) {
                     case EVT_PORT_WAIT:
-                    case EVT_HANDLE_WAIT:
+                    case EVT_WAIT_ONE:
                         glyph = gSQUARE;
                         break;
-                    case EVT_PORT_WAITED:
-                    case EVT_HANDLE_WAITED:
+                    case EVT_PORT_WAIT_DONE:
+                    case EVT_WAIT_ONE_DONE:
                         glyph = gRIGHT;
                         break;
                     case EVT_MSGPIPE_CREATE:

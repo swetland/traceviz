@@ -119,7 +119,7 @@ void Thread::finish(uint64_t ts) {
 Process::Process(uint32_t _id) : Object(_id, KPROC) {
 }
 
-MsgPipe::MsgPipe(uint32_t _id) : Object(_id, KPIPE) {
+MsgPipe::MsgPipe(uint32_t _id) : Object(_id, KPIPE), other(nullptr) {
 }
 
 void Trace::add_object(Object* object) {
@@ -175,37 +175,38 @@ void Trace::finish(uint64_t ts) {
             obj->finish(ts);
         }
     }
+    for (Object* obj = kthread_list; obj != nullptr; obj = obj->next) {
+        obj->finish(ts);
+    }
 }
 
-#if KTHREADS
 // kthread ids are their kvaddrs and may collide with koids
 // but there are usually only a handful of these, so just use
 // a simple linked list
-typedef struct kthread kthread_t;
-struct kthread {
-    kthread_t* next;
-    uint64_t last_ts;
-    uint32_t id;
-};
-
-kthread_t* kthread_list;
-
-kthread_t* find_kthread(uint32_t id) {
-    kthread_t* t;
-    for (t = kthread_list; t != NULL; t = t->next) {
-        if (t->id == id) {
-            return t;
+Thread* Trace::find_kthread(uint32_t id, bool create) {
+    Object* o;
+    for (o = kthread_list; o != nullptr; o = o->next) {
+        if (o->id == id) {
+            return o->as_thread();
         }
     }
-    t = (kthread_t*)malloc(sizeof(kthread_t));
-    t->id = id;
-    t->last_ts = 0;
+
+    if (!create) {
+        return nullptr;
+    }
+
+    // create new kernel thread
+    Thread* t = new Thread(id);
+    t->track = track_create();
     t->next = kthread_list;
     kthread_list = t;
-    evt_thread_name(0, id, (id & 0x80000000) ? "idle" : "kernel");
+
+    // add it to the kernel "process"
+    Process* p = find_process(0);
+    group_add_track(p->group, t->track);
+    t->flags |= OBJ_RESOLVED;
     return t;
 }
-#endif
 
 static uint64_t ticks_per_ms;
 
@@ -218,11 +219,14 @@ uint64_t ticks_to_ts(uint64_t ts) {
     }
 }
 
-const char* recname(const ktrace_record_t* rec) {
-    static char name[25];
-    memcpy(name, &rec->ts, 24);
-    name[24] = 0;
-    return name;
+const char* recname(ktrace_rec_name_t& rec) {
+    uint32_t len = KTRACE_LEN(rec.tag);
+    if (len < (sizeof(ktrace_header_t) + sizeof(uint32_t) + 1)) {
+        return "ERROR";
+    }
+    len -= (sizeof(ktrace_header_t) + sizeof(uint32_t));
+    rec.name[len - 1] = 0;
+    return rec.name;
 }
 
 int verbose = 0;
@@ -231,24 +235,20 @@ int text = 0;
 void Trace::evt_context_switch(uint64_t ts, uint32_t oldtid, uint32_t newtid,
                                uint32_t state, uint32_t cpu,
                                uint32_t oldthread, uint32_t newthread) {
-#if KTHREADS
-    char name[32];
-    sprintf(name, "cpu%u", cpu);
-    if (ei->tid == 0) {
-        kthread_t* t = find_kthread(oldthread);
-    }
-    if (newtid == 0) {
-        kthread_t* t = find_kthread(newthread);
-    }
-#endif
+    Thread* t;
     if (oldtid) {
-        Thread* t = find_thread(oldtid);
-        track_append(t->track, ts, state, cpu);
+        t = find_thread(oldtid);
+    } else {
+        t = find_kthread(oldthread);
     }
+    track_append(t->track, ts, state, cpu);
+
     if (newtid) {
-        Thread* t = find_thread(newtid);
-        track_append(t->track, ts, TS_RUNNING, cpu);
+        t = find_thread(newtid);
+    } else {
+        t = find_kthread(newthread);
     }
+    track_append(t->track, ts, TS_RUNNING, cpu);
 }
 
 void Trace::evt_process_create(uint64_t ts, Thread* t, uint32_t pid) {
@@ -273,19 +273,34 @@ void Trace::evt_thread_create(uint64_t ts, Thread* ct, uint32_t tid, uint32_t pi
     Thread* t = find_thread(tid);
     if (t->flags & OBJ_RESOLVED) {
         fprintf(stderr, "error: thread %08x already created\n", tid);
+        return;
     }
     Process* p = find_process(pid);
     group_add_track(p->group, t->track);
+    t->flags |= OBJ_RESOLVED;
 }
 void Trace::evt_thread_delete(uint64_t ts, Thread* t, uint32_t tid) {
 }
 void Trace::evt_thread_start(uint64_t ts, Thread* t, uint32_t tid) {
 }
-void Trace::evt_thread_name(uint32_t tid, const char* name) {
+void Trace::evt_thread_name(uint32_t tid, uint32_t pid, const char* name) {
     char tmp[128];
     sprintf(tmp, "%s (%u)", name, tid);
     Thread* t = find_thread(tid);
     t->track->name = strdup(tmp);
+
+    // if thread is not created, it must be already running
+    // so we'll create it retroactively
+    if (!(t->flags & OBJ_RESOLVED)) {
+        Process* p = find_process(pid);
+        group_add_track(p->group, t->track);
+        t->flags |= OBJ_RESOLVED;
+    }
+}
+
+void Trace::evt_kthread_name(uint32_t tid, const char* name) {
+    Thread* t = find_kthread(tid);
+    t->track->name = strdup(name);
 }
 
 void Trace::evt_msgpipe_create(uint64_t ts, Thread* t, uint32_t id, uint32_t otherid) {
@@ -336,8 +351,8 @@ void Trace::evt_msgpipe_read(uint64_t ts, Thread* t, uint32_t id, uint32_t bytes
     evt->b = handles;
 
     if (pipe->msgs.size()) {
-        MsgPipe* other = pipe->other;
         auto msg = pipe->msgs.front();
+        //MsgPipe* other = pipe->other;
         //fprintf(stderr, "RD %p <- %p(%u,%u) %d\n", pipe, other, msg.trackidx, msg.eventidx, pipe->msgs.size());
         evt->trackidx = msg.trackidx;
         evt->eventidx = msg.eventidx;
@@ -351,16 +366,16 @@ void Trace::evt_port_wait(uint64_t ts, Thread* t, uint32_t id) {
     track_add_event(t->track, ts, EVT_PORT_WAIT);
 }
 void Trace::evt_port_wait_done(uint64_t ts, Thread* t, uint32_t id) {
-    track_add_event(t->track, ts, EVT_PORT_WAITED);
+    track_add_event(t->track, ts, EVT_PORT_WAIT_DONE);
 }
 void Trace::evt_port_delete(uint64_t ts, Thread* t, uint32_t id) {
 }
 
 void Trace::evt_wait_one(uint64_t ts, Thread* t, uint32_t id, uint32_t signals, uint64_t timeout) {
-    track_add_event(t->track, ts, EVT_HANDLE_WAIT);
+    track_add_event(t->track, ts, EVT_WAIT_ONE);
 }
 void Trace::evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pending, uint32_t status) {
-    track_add_event(t->track, ts, EVT_HANDLE_WAITED);
+    track_add_event(t->track, ts, EVT_WAIT_ONE_DONE);
 }
 
 typedef struct {
@@ -394,150 +409,149 @@ void dump_stats(stats_t* s) {
 }
 
 static stats_t s;
-bool is_regular_event(uint32_t tag) {
-    switch (tag) {
-    case TAG_OBJECT_DELETE:
-    case TAG_PROC_CREATE:
-    case TAG_PROC_START:
-    case TAG_THREAD_CREATE:
-    case TAG_THREAD_START:
-    case TAG_MSGPIPE_CREATE:
-    case TAG_MSGPIPE_WRITE:
-    case TAG_MSGPIPE_READ:
-    case TAG_PORT_CREATE:
-    case TAG_PORT_QUEUE:
-    case TAG_PORT_WAIT:
-    case TAG_PORT_WAIT_DONE:
-    case TAG_WAIT_ONE:
-    case TAG_WAIT_ONE_DONE:
-        return true;
-    default:
-        return false;
-    }
+
+#define trace(fmt...) do { if(text) fprintf(stderr, fmt); } while (0)
+
+typedef union ktrace_record {
+    ktrace_header_t hdr;
+    ktrace_rec_32b_t x4;
+    ktrace_rec_name_t name;
+    uint8_t raw[256];
+} ktrace_record_t;
+
+static inline void tracehdr(uint64_t ts, uint32_t id) {
+   trace("%04lu.%09lu [%08x] ", ts/(1000000000UL), ts%(1000000000UL), id);
 }
 
-#define trace(fmt...) do { if(text) printf(fmt); } while (0)
-
-void Trace::import_special(ktrace_record_t& rec, uint32_t tag) {
-    trace("                          ");
-
-    switch (tag) {
-    case TAG_TICKS_PER_MS:
-        ticks_per_ms = ((uint64_t)rec.a) | (((uint64_t)rec.b) << 32);
+void Trace::import_event(ktrace_record_t& rec, uint64_t ts, uint32_t evt) {
+    //fprintf(stderr, "TAG %08x TID %08x EVT %03x\n", rec.hdr.tag, rec.hdr.tid, evt);
+    switch (evt) {
+    case EVT_VERSION:
+        tracehdr(0, 0);
+        trace("VERSION      n=%08x\n", rec.x4.a);
+        return;
+    case EVT_TICKS_PER_MS:
+        ticks_per_ms = ((uint64_t)rec.x4.a) | (((uint64_t)rec.x4.b) << 32);
+        tracehdr(0, 0);
         trace("TICKS_PER_MS n=%lu\n", ticks_per_ms);
-        break;
-    case TAG_CONTEXT_SWITCH:
+        return;
+    case EVT_CONTEXT_SWITCH:
         s.context_switch++;
+        tracehdr(ts, rec.hdr.tid);
         trace("CTXT_SWITCH to=%08x st=%d cpu=%d old=%08x new=%08x\n",
-              rec.a, rec.b >> 16, rec.b & 0xFFFF, rec.c, rec.d);
-        evt_context_switch(ticks_to_ts(rec.ts), rec.id, rec.a, rec.b >> 16, rec.b & 0xFFFF, rec.c, rec.d);
-        break;
-    case TAG_PROC_NAME:
-        trace("PROC_NAME   id=%08x '%s'\n", rec.id, recname(&rec));
-        evt_process_name(rec.id, recname(&rec), 10);
-        break;
-    case TAG_THREAD_NAME:
-        trace("THRD_NAME   id=%08x '%s'\n", rec.id, recname(&rec));
-        evt_thread_name(rec.id, recname(&rec));
-        break;
-    default:
-        trace("UNKNOWN_TAG id=%08x tag=%08x\n", rec.id, tag);
-        break;
-    }
-}
-
-void Trace::import_regular(ktrace_record_t& rec, uint64_t ts, uint32_t tag) {
-    if (rec.id == 0) {
-        // ignore kernel threads
+              rec.x4.a, rec.x4.b >> 16, rec.x4.b & 0xFFFF, rec.x4.c, rec.x4.d);
+        evt_context_switch(ts, rec.x4.tid, rec.x4.a, rec.x4.b >> 16, rec.x4.b & 0xFFFF, rec.x4.c, rec.x4.d);
+        return;
+    case EVT_PROC_NAME:
+        tracehdr(ts, rec.hdr.tid);
+        trace("PROC_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        evt_process_name(rec.name.id, recname(rec.name), 10);
+        return;
+    case EVT_THREAD_NAME:
+        tracehdr(ts, rec.hdr.tid);
+        trace("THRD_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        evt_thread_name(rec.name.id, rec.name.arg, recname(rec.name));
+        return;
+    case EVT_KTHREAD_NAME:
+        tracehdr(ts, rec.hdr.tid);
+        trace("THRD_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        evt_kthread_name(rec.name.id, recname(rec.name));
         return;
     }
-    Thread* t = find_thread(rec.id);
 
-    trace("%04lu.%09lu [%08x] ", ts/(1000000000UL), ts%(1000000000UL), rec.id);
+    if (rec.hdr.tid == 0) {
+        // ignore kernel threads except for context switches
+        return;
+    }
+    Thread* t = find_thread(rec.hdr.tid);
 
-    switch (tag) {
-    case TAG_OBJECT_DELETE:
+    tracehdr(ts, rec.hdr.tid);
+    switch (evt) {
+    case EVT_OBJECT_DELETE:
         Object* oi;
-        if ((oi = find_object(rec.a, 0)) == 0) {
-            trace("OBJT_DELETE id=%08x\n", rec.a);
+        if ((oi = find_object(rec.x4.a, 0)) == 0) {
+            trace("OBJT_DELETE id=%08x\n", rec.x4.a);
         } else {
-            trace("%s_DELETE id=%08x\n", kind_string(oi->kind), rec.a);
+            trace("%s_DELETE id=%08x\n", kind_string(oi->kind), rec.x4.a);
             switch (oi->kind) {
             case KPIPE:
                 s.msgpipe_del++;
-                evt_msgpipe_delete(ts, t, rec.a);
+                evt_msgpipe_delete(ts, t, rec.x4.a);
                 break;
             case KTHREAD:
                 s.thread_del++;
-                evt_thread_delete(ts, t, rec.a);
+                evt_thread_delete(ts, t, rec.x4.a);
                 break;
             case KPROC:
                 s.process_del++;
-                evt_process_delete(ts, t, rec.a);
+                evt_process_delete(ts, t, rec.x4.a);
                 break;
             case KPORT:
-                evt_port_delete(ts, t, rec.a);
+                evt_port_delete(ts, t, rec.x4.a);
                 break;
             }
         }
         break;
-    case TAG_PROC_CREATE:
+    case EVT_PROC_CREATE:
         s.process_new++;
-        trace("PROC_CREATE id=%08x\n", rec.a);
-        evt_process_create(ts, t, rec.a);
+        trace("PROC_CREATE id=%08x\n", rec.x4.a);
+        evt_process_create(ts, t, rec.x4.a);
         break;
-    case TAG_PROC_START:
-        trace("PROC_START  id=%08x tid=%08x\n", rec.b, rec.a);
-        evt_process_start(ts, t, rec.b, rec.a);
+    case EVT_PROC_START:
+        trace("PROC_START  id=%08x tid=%08x\n", rec.x4.b, rec.x4.a);
+        evt_process_start(ts, t, rec.x4.b, rec.x4.a);
         break;
-    case TAG_THREAD_CREATE:
+    case EVT_THREAD_CREATE:
         s.thread_new++;
-        trace("THRD_CREATE id=%08x pid=%08x\n", rec.a, rec.b);
-        evt_thread_create(ts, t, rec.a, rec.b);
+        trace("THRD_CREATE id=%08x pid=%08x\n", rec.x4.a, rec.x4.b);
+        evt_thread_create(ts, t, rec.x4.a, rec.x4.b);
         break;
-    case TAG_THREAD_START:
-        trace("THRD_START  id=%08x\n", rec.a);
-        evt_thread_start(ts, t, rec.a);
+    case EVT_THREAD_START:
+        trace("THRD_START  id=%08x\n", rec.x4.a);
+        evt_thread_start(ts, t, rec.x4.a);
         break;
-    case TAG_MSGPIPE_CREATE:
+    case EVT_MSGPIPE_CREATE:
         s.msgpipe_new += 2;
-        trace("MPIP_CREATE id=%08x other=%08x flags=%x\n", rec.a, rec.b, rec.c);
-        evt_msgpipe_create(ts, t, rec.a, rec.b);
+        trace("MPIP_CREATE id=%08x other=%08x flags=%x\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        evt_msgpipe_create(ts, t, rec.x4.a, rec.x4.b);
         break;
-    case TAG_MSGPIPE_WRITE:
+    case EVT_MSGPIPE_WRITE:
         s.msgpipe_write++;
-        trace("MPIP_WRITE  id=%08x bytes=%d handles=%d\n", rec.a, rec.b, rec.c);
-        evt_msgpipe_write(ts, t, rec.a, rec.b, rec.c);
+        trace("MPIP_WRITE  id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        evt_msgpipe_write(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
-    case TAG_MSGPIPE_READ:
+    case EVT_MSGPIPE_READ:
         s.msgpipe_read++;
-        trace("MPIP_READ   id=%08x bytes=%d handles=%d\n", rec.a, rec.b, rec.c);
-        evt_msgpipe_read(ts, t, rec.a, rec.b, rec.c);
+        trace("MPIP_READ   id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        evt_msgpipe_read(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
-    case TAG_PORT_CREATE:
-        trace("PORT_CREATE id=%08x\n", rec.a);
-        evt_port_create(ts, t, rec.a);
+    case EVT_PORT_CREATE:
+        trace("PORT_CREATE id=%08x\n", rec.x4.a);
+        evt_port_create(ts, t, rec.x4.a);
         break;
-    case TAG_PORT_QUEUE:
-        trace("PORT_QUEUE  id=%08x\n", rec.a);
+    case EVT_PORT_QUEUE:
+        trace("PORT_QUEUE  id=%08x\n", rec.x4.a);
         break;
-    case TAG_PORT_WAIT:
-        trace("PORT_WAIT   id=%08x\n", rec.a);
-        evt_port_wait(ts, t, rec.a);
+    case EVT_PORT_WAIT:
+        trace("PORT_WAIT   id=%08x\n", rec.x4.a);
+        evt_port_wait(ts, t, rec.x4.a);
         break;
-    case TAG_PORT_WAIT_DONE:
-        trace("PORT_WDONE  id=%08x\n", rec.a);
-        evt_port_wait_done(ts, t, rec.a);
+    case EVT_PORT_WAIT_DONE:
+        trace("PORT_WDONE  id=%08x\n", rec.x4.a);
+        evt_port_wait_done(ts, t, rec.x4.a);
         break;
-    case TAG_WAIT_ONE: {
-        uint64_t timeout = ((uint64_t)rec.c) | (((uint64_t)rec.d) << 32);
-        trace("WAIT_ONE    id=%08x signals=%08x timeout=%lu\n", rec.a, rec.b, timeout);
-        evt_wait_one(ts, t, rec.a, rec.b, timeout);
+    case EVT_WAIT_ONE: {
+        uint64_t timeout = ((uint64_t)rec.x4.c) | (((uint64_t)rec.x4.d) << 32);
+        trace("WAIT_ONE    id=%08x signals=%08x timeout=%lu\n", rec.x4.a, rec.x4.b, timeout);
+        evt_wait_one(ts, t, rec.x4.a, rec.x4.b, timeout);
         break;
     }
-    case TAG_WAIT_ONE_DONE:
-        trace("WAIT_DONE   id=%08x pending=%08x result=%08x\n", rec.a, rec.b, rec.c);
-        evt_wait_one_done(ts, t, rec.a, rec.b, rec.c);
+    case EVT_WAIT_ONE_DONE:
+        trace("WAIT_DONE   id=%08x pending=%08x result=%08x\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        evt_wait_one_done(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
+        break;
+    default:
+        trace("UNKNOWN_EVT id=%08x tag=%08x evt=%03x\n", rec.hdr.tid, rec.hdr.tag, evt);
         break;
     }
 }
@@ -574,11 +588,21 @@ int Trace::import(int fd) {
 
     evt_process_name(0, "Magenta Kernel", 0);
 
-    while (read(fd, &rec, sizeof(rec)) == sizeof(rec)) {
-        uint32_t tag = rec.tag & 0xFFFFFF00;
-        offset += 32;
+    while (read(fd, rec.raw, sizeof(ktrace_header_t)) == sizeof(ktrace_header_t)) {
+        uint32_t tag = rec.hdr.tag;
+        uint32_t len = KTRACE_LEN(tag);
         if (tag == 0) {
             fprintf(stderr, "eof: zero tag at offset %08x\n", offset);
+            break;
+        }
+        if (len < sizeof(ktrace_header_t)) {
+            fprintf(stderr, "eof: short packet at offset %08x\n", offset);
+            break;
+        }
+        offset += (sizeof(ktrace_header_t) + len);
+        len -= sizeof(ktrace_header_t);
+        if (read(fd, rec.raw + sizeof(ktrace_header_t), len) != len) {
+            fprintf(stderr, "eof: incomplete packet at offset %08x\n", offset);
             break;
         }
         if (offset > limit) {
@@ -586,18 +610,42 @@ int Trace::import(int fd) {
         }
 
         s.events++;
-        if (is_regular_event(tag)) {
-            ts = ticks_to_ts(rec.ts);
-            import_regular(rec, ts, tag);
-        } else {
-            import_special(rec, tag);
-        }
+        ts = ticks_to_ts(rec.hdr.ts);
+        import_event(rec, ts, KTRACE_EVENT(tag));
     }
     if (s.events) {
         s.ts_last = ts;
         finish(ts);
         adjust_tracks(group_list);
     }
+
+    // shuffle the idle threads to the front of the kernel thread list
+    Group* k = find_process(0)->group;
+    Track* first = nullptr;
+    Track* last = nullptr;
+    Track* next;
+    for (Track* t = k->first; t != nullptr; t = next) {
+        next = t->next;
+        if (!strncmp(t->name, "idle", 4)) {
+            if (last == nullptr) {
+                t->next = nullptr;
+                first = last = t;
+            } else {
+                t->next = first;
+                first = t;
+            }
+        } else {
+            if (last == nullptr) {
+                first = t;
+            } else {
+                last->next = t;
+            }
+            last = t;
+            t->next = nullptr;
+        }
+    }
+    k->first = first;
+    k->last = last;
 
     if (show_stats) {
         dump_stats(&s);
@@ -634,7 +682,6 @@ int Trace::import(int argc, char** argv) {
         fprintf(stderr, "error: cannot open '%s'\n", argv[0]);
         return -1;
     }
-    text = 0;
     int r = import(fd);
     close(fd);
     return r;

@@ -13,9 +13,9 @@
 int traceviz_main(int argc, char** argv);
 int traceviz_render(void);
 
-#define DEF_EVENT(name,n,s) EVT_##name = n,
+#define KTRACE_DEF(num,type,name,group) EVT_##name = num,
 enum {
-#include "events.h"
+#include "ktrace-def.h"
 };
 
 namespace tv {
@@ -138,7 +138,7 @@ struct MsgPipe : public Object {
 };
 
 typedef struct evtinfo evt_info_t;
-typedef struct ktrace_record ktrace_record_t;
+typedef union ktrace_record ktrace_record_t;
 
 #define HASHBITS 10
 #define BUCKETS (1 << HASHBITS)
@@ -150,6 +150,8 @@ struct Trace {
 
     Object *objhash[BUCKETS];
 
+    Thread* kthread_list;
+
     Track* get_track(unsigned n) {
         return tracks[n];
     }
@@ -160,11 +162,11 @@ struct Trace {
 
     int import(int argc, char** argv);
     int import(int fd);
-    void import_regular(ktrace_record_t& rec, uint64_t ts, uint32_t tag);
-    void import_special(ktrace_record_t& rec, uint32_t tag);
+    void import_event(ktrace_record_t& rec, uint64_t ts, uint32_t evt);
 
     void evt_process_name(uint32_t pid, const char* name, uint32_t index);
-    void evt_thread_name(uint32_t tid, const char* name);
+    void evt_thread_name(uint32_t tid, uint32_t pid, const char* name);
+    void evt_kthread_name(uint32_t tid, const char* name);
     void evt_context_switch(uint64_t ts, uint32_t oldtid, uint32_t newtid,
                             uint32_t state, uint32_t cpu,
                             uint32_t oldthread, uint32_t newthread);
@@ -193,6 +195,8 @@ struct Trace {
     Process* find_process(uint32_t id, bool create = true);
     Thread* find_thread(uint32_t id, bool create = true);
     MsgPipe* find_msgpipe(uint32_t id, bool create = true);
+
+    Thread* find_kthread(uint32_t id, bool create = true);
 
     Group* group_create(void);
     void group_add_track(Group* group, Track* track);
