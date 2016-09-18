@@ -32,13 +32,72 @@ const char* evtname(uint32_t evt) {
     }
 };
 
-void EventTooltip(Event* evt) {
+const char* irqname(uint32_t irqn) {
+    switch (irqn) {
+    case 0x00: return "DIVIDE_0";
+    case 0x01: return "DEBUG";
+    case 0x02: return "NMI";
+    case 0x03: return "BREAKPOINT";
+    case 0x04: return "OVERFLOW";
+    case 0x05: return "BOUND_RANGE";
+    case 0x06: return "INVALID_OP";
+    case 0x07: return "DEVICE_NA";
+    case 0x08: return "DOUBLE_FAULT";
+    case 0x0A: return "INVALID_TSS";
+    case 0x0B: return "SEGMENT_NOT_PRESENT";
+    case 0x0C: return "STACK_FAULT";
+    case 0x0D: return "GP_FAULT";
+    case 0x0E: return "PAGE_FAULT";
+    case 0x10: return "RESERVED";
+    case 0x11: return "FPU_FP_ERROR";
+    case 0x12: return "ALIGNMENT_CHECK";
+    case 0x13: return "MACHINE_CHECK";
+    case 0x14: return "SIMD_FP_ERROR";
+    case 0x15: return "VIRT";
+    case 0xF0: return "APIC_SPURIOUS";
+    case 0xF1: return "APIC_TIMER";
+    case 0xF2: return "APIC_ERROR";
+    case 0xF3: return "IPI_GENERIC";
+    case 0xF4: return "IPI_RESCHEDULE";
+    case 0xF5: return "IPI_HALT";
+    default: return NULL;
+    }
+}
+
+void EventTooltip(Trace& trace, Event* evt) {
     switch (evt->tag) {
     case EVT_MSGPIPE_READ:
     case EVT_MSGPIPE_WRITE:
         ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u",
                           evtname(evt->tag), evt->a, evt->b);
         break;
+    case EVT_IRQ_ENTER: {
+        const char* name = irqname(evt->b);
+        if (name) {
+            ImGui::SetTooltip("IRQ %d %s", evt->b, name);
+        } else {
+            ImGui::SetTooltip("IRQ %d", evt->b);
+        }
+        break;
+    }
+    case EVT_SYSCALL_ENTER: {
+        const char* name = trace.syscall_name(evt->a);
+        if (name) {
+            ImGui::SetTooltip("SYSCALL %s()", name);
+        } else {
+            ImGui::SetTooltip("SYSCALL sys_%u()", evt->a);
+        }
+        break;
+    }
+    case EVT_SYSCALL_EXIT: {
+        const char* name = trace.syscall_name(evt->a);
+        if (name) {
+            ImGui::SetTooltip("SYSRETN %s()", name);
+        } else {
+            ImGui::SetTooltip("SYSRETN sys_%u()", evt->a);
+        }
+        break;
+    }
     default:
         ImGui::SetTooltip("%s", evtname(evt->tag));
         break;
@@ -118,6 +177,11 @@ void DrawDownTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, 0), pos + ImVec2(size.x/2.0, size.y), col);
 }
 
+static bool show_color_editor = false;
+static bool show_metrics_window = false;
+static bool show_syscalls = true;
+static bool show_interrupts = true;
+static bool show_help_window = false;
 static bool show_flow = true;
 static bool show_evts = true;
 
@@ -177,6 +241,15 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
     if (ImGui::IsKeyPressed(KEY(E), false)) {
         show_evts = !show_evts;
+    }
+    if (ImGui::IsKeyPressed(KEY(I), false)) {
+        show_interrupts = !show_interrupts;
+    }
+    if (ImGui::IsKeyPressed(KEY(C), false)) {
+        show_syscalls = !show_syscalls;
+    }
+    if (ImGui::IsKeyPressed(KEY(H), false)) {
+        show_help_window = !show_help_window;
     }
     if (ImGui::IsKeyPressed(KEY(M), false)) {
         if (!is_marking && (mark0_pos != mark1_pos)) {
@@ -398,8 +471,8 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         }
     }
 
-    //const ImFont::Glyph* gUP = symbols->FindGlyph('A');
-    //const ImFont::Glyph* gDOWN = symbols->FindGlyph('B');
+    const ImFont::Glyph* gUP = symbols->FindGlyph('A');
+    const ImFont::Glyph* gDOWN = symbols->FindGlyph('B');
     const ImFont::Glyph* gRIGHT = symbols->FindGlyph('C');
     //const ImFont::Glyph* gLEFT = symbols->FindGlyph('D');
     const ImFont::Glyph* gSQUARE = symbols->FindGlyph('E');
@@ -455,13 +528,8 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
 
                 }
-                if (show_evts) {
-                    auto gpos = pos + ImVec2(x, -1.0);
-                    float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
-                    if (d < tt_dist) {
-                        tt_dist = d;
-                        tt_evt = &(*e);
-                    }
+                if (show_evts || show_syscalls || show_interrupts) {
+                    bool show = show_evts;
                     const ImFont::Glyph* glyph;
                     switch (e->tag) {
                     case EVT_PORT_WAIT:
@@ -481,11 +549,31 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     case EVT_MSGPIPE_READ:
                         glyph = gRECV;
                         break;
+                    case EVT_SYSCALL_ENTER:
+                        glyph = gUP;
+                        show = show_syscalls;
+                        break;
+                    case EVT_SYSCALL_EXIT:
+                        glyph = gDOWN;
+                        show = show_syscalls;
+                        break;
+                    case EVT_IRQ_ENTER:
+                        glyph = gDIAMOND;
+                        show = show_interrupts;
+                        break;
                     default:
                         glyph = gDIAMOND;
                         break;
                     }
-                    symbols->RenderGlyph(dl, gpos, ImColor(0, 0, 220), glyph);
+                    if (show) {
+                        auto gpos = pos + ImVec2(x, -1.0);
+                        float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
+                        if (d < tt_dist) {
+                            tt_dist = d;
+                            tt_evt = &(*e);
+                        }
+                        symbols->RenderGlyph(dl, gpos, ImColor(0, 0, 220), glyph);
+                    }
                 }
                 last_x = x;
             }
@@ -494,7 +582,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
 
     if (show_evts && (sqrtf(tt_dist) < 12.0)) {
-        EventTooltip(tt_evt);
+        EventTooltip(trace, tt_evt);
     }
 
     if ((mark0_pos != mark1_pos) || is_marking) {
@@ -510,9 +598,6 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
     ImGui::PopClipRect();
 }
-
-static bool show_color_editor = false;
-static bool show_metrics_window = false;
 
 int traceviz_main(int argc, char** argv) {
     TheTrace.import(argc, argv);
@@ -597,12 +682,13 @@ int traceviz_render(void) {
     ImGui::Begin("Trace");
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            ImGui::MenuItem("Quit", "CTRL+Q");
+            ImGui::MenuItem("Quit", "ESC");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Window")) {
             if (ImGui::MenuItem("Color Editor")) { show_color_editor = true; }
             if (ImGui::MenuItem("Metrics")) { show_metrics_window = true; }
+            if (ImGui::MenuItem("Help")) { show_help_window = true; }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -619,6 +705,25 @@ int traceviz_render(void) {
                                               task_float_color[n*3+2]);
             }
         }
+        ImGui::End();
+    }
+
+    // Render Help Window
+    if (show_help_window) {
+        ImGui::Begin("Help", &show_help_window);
+        ImGui::Text("A/D - Pan Left / Pan Right");
+        ImGui::Text("W/S - Zoom In / Zoom Out");
+        ImGui::Text(" ");
+        ImGui::Text("E - Toggle Show Events");
+        ImGui::Text("F - Toggle Show IPC Flow");
+        ImGui::Text("I - Toggle Show Interrupts");
+        ImGui::Text("C - Toggle Show Syscalls");
+        ImGui::Text("H - Toggle Show Help");
+        ImGui::Text("0 - Go To Origin");
+        ImGui::Text("M - Go To Mark");
+        ImGui::Text(" ");
+        ImGui::Text("Ctrl-Drag - Mark / Measure");
+        ImGui::Text("Click-Drag - Pan Left / Pan Right");
         ImGui::End();
     }
 

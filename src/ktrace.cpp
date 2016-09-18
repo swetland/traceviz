@@ -221,11 +221,11 @@ uint64_t ticks_to_ts(uint64_t ts) {
 
 const char* recname(ktrace_rec_name_t& rec) {
     uint32_t len = KTRACE_LEN(rec.tag);
-    if (len < (sizeof(ktrace_header_t) + sizeof(uint32_t) + 1)) {
+    if (len < (KTRACE_NAMESIZE + 1)) {
         return "ERROR";
     }
-    len -= (sizeof(ktrace_header_t) + sizeof(uint32_t));
-    rec.name[len - 1] = 0;
+    len -= (KTRACE_NAMESIZE - 1);
+    rec.name[len] = 0;
     return rec.name;
 }
 
@@ -249,6 +249,15 @@ void Trace::evt_context_switch(uint64_t ts, uint32_t oldtid, uint32_t newtid,
         t = find_kthread(newthread);
     }
     track_append(t->track, ts, TS_RUNNING, cpu);
+
+    if (cpu >= MAXCPU) {
+        return;
+    }
+    active[cpu] = t;
+}
+
+void Trace::evt_syscall_name(uint32_t num, const char* name) {
+    syscall_names[num] = strdup(name);
 }
 
 void Trace::evt_process_create(uint64_t ts, Thread* t, uint32_t pid) {
@@ -378,6 +387,40 @@ void Trace::evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pend
     track_add_event(t->track, ts, EVT_WAIT_ONE_DONE);
 }
 
+void Trace::evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn) {
+    if (cpu >= MAXCPU) {
+        return;
+    }
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_IRQ_ENTER);
+        evt->a = cpu;
+        evt->b = irqn;
+    }
+}
+
+void Trace::evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num) {
+    if (cpu >= MAXCPU) {
+        return;
+    }
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_SYSCALL_ENTER);
+        evt->a = num;
+    }
+}
+
+void Trace::evt_syscall_exit(uint64_t ts, uint32_t cpu, uint32_t num) {
+    if (cpu >= MAXCPU) {
+        return;
+    }
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_SYSCALL_EXIT);
+        evt->a = num;
+    }
+}
+
 typedef struct {
     uint64_t ts_first;
     uint64_t ts_last;
@@ -423,8 +466,10 @@ static inline void tracehdr(uint64_t ts, uint32_t id) {
    trace("%04lu.%09lu [%08x] ", ts/(1000000000UL), ts%(1000000000UL), id);
 }
 
-void Trace::import_event(ktrace_record_t& rec, uint64_t ts, uint32_t evt) {
-    //fprintf(stderr, "TAG %08x TID %08x EVT %03x\n", rec.hdr.tag, rec.hdr.tid, evt);
+void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
+    // only valid if the sub-header actually uses this field
+    uint64_t ts = ticks_to_ts(rec.hdr.ts);
+
     switch (evt) {
     case EVT_VERSION:
         tracehdr(0, 0);
@@ -441,22 +486,52 @@ void Trace::import_event(ktrace_record_t& rec, uint64_t ts, uint32_t evt) {
         trace("CTXT_SWITCH to=%08x st=%d cpu=%d old=%08x new=%08x\n",
               rec.x4.a, rec.x4.b >> 16, rec.x4.b & 0xFFFF, rec.x4.c, rec.x4.d);
         evt_context_switch(ts, rec.x4.tid, rec.x4.a, rec.x4.b >> 16, rec.x4.b & 0xFFFF, rec.x4.c, rec.x4.d);
+        s.ts_last = ts;    s.ts_last = ts;
         return;
     case EVT_PROC_NAME:
-        tracehdr(ts, rec.hdr.tid);
-        trace("PROC_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        tracehdr(0, 0);
+        trace("PROC_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_process_name(rec.name.id, recname(rec.name), 10);
         return;
     case EVT_THREAD_NAME:
-        tracehdr(ts, rec.hdr.tid);
-        trace("THRD_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        tracehdr(0, 0);
+        trace("THRD_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_thread_name(rec.name.id, rec.name.arg, recname(rec.name));
         return;
     case EVT_KTHREAD_NAME:
-        tracehdr(ts, rec.hdr.tid);
-        trace("THRD_NAME   id=%08x '%s'\n", rec.hdr.tid, recname(rec.name));
+        tracehdr(0, 0);
+        trace("THRD_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_kthread_name(rec.name.id, recname(rec.name));
         return;
+    case EVT_SYSCALL_NAME:
+        tracehdr(0, 0);
+        trace("SYSCALLNAME id=%08x '%s'\n", rec.name.id, recname(rec.name));
+        evt_syscall_name(rec.name.id, recname(rec.name));
+        return;
+    case EVT_IRQ_ENTER:
+        tracehdr(ts, 0);
+        trace("IRQ_ENTER   cpu=%03d irqn=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        evt_irq_enter(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        return;
+    case EVT_SYSCALL_ENTER:
+        tracehdr(ts, 0);
+        trace("SYSCALL     cpu=%03d n=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        evt_syscall_enter(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        return;
+    case EVT_SYSCALL_EXIT:
+        tracehdr(ts, 0);
+        trace("SYSCALL_RET cpu=%03d n=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        evt_syscall_exit(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        return;
+    default:
+        // events before 0x100 do not have the common tag/tid/ts header
+        // so bail here instead of in the later switch
+        if (evt < 0x100) {
+            tracehdr(0, 0);
+            trace("UNKNOWN_EVT tag=%08x evt=%03x\n", rec.hdr.tag, evt);
+            return;
+        }
+        break;
     }
 
     if (rec.hdr.tid == 0) {
@@ -583,7 +658,6 @@ void adjust_tracks(Group* groups) {
 int Trace::import(int fd) {
     ktrace_record_t rec;
     unsigned offset = 0;
-    uint64_t ts = 0;
     memset(&s, 0, sizeof(s));
 
     evt_process_name(0, "Magenta Kernel", 0);
@@ -610,12 +684,10 @@ int Trace::import(int fd) {
         }
 
         s.events++;
-        ts = ticks_to_ts(rec.hdr.ts);
-        import_event(rec, ts, KTRACE_EVENT(tag));
+        import_event(rec, KTRACE_EVENT(tag));
     }
     if (s.events) {
-        s.ts_last = ts;
-        finish(ts);
+        finish(s.ts_last);
         adjust_tracks(group_list);
     }
 

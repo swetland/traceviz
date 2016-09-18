@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <deque>
+#include <map>
 
 int traceviz_main(int argc, char** argv);
 int traceviz_render(void);
@@ -143,8 +144,11 @@ typedef union ktrace_record ktrace_record_t;
 #define HASHBITS 10
 #define BUCKETS (1 << HASHBITS)
 
+#define MAXCPU 32
+
 struct Trace {
     std::vector<Track*> tracks;
+    std::map<uint32_t,const char*> syscall_names;
     Group* group_list;
     Group* group_last;
 
@@ -160,10 +164,13 @@ struct Trace {
         tracks.push_back(track);
     }
 
+    Thread* active[MAXCPU];
+
     int import(int argc, char** argv);
     int import(int fd);
-    void import_event(ktrace_record_t& rec, uint64_t ts, uint32_t evt);
+    void import_event(ktrace_record_t& rec, uint32_t evt);
 
+    void evt_syscall_name(uint32_t num, const char* name);
     void evt_process_name(uint32_t pid, const char* name, uint32_t index);
     void evt_thread_name(uint32_t tid, uint32_t pid, const char* name);
     void evt_kthread_name(uint32_t tid, const char* name);
@@ -186,7 +193,9 @@ struct Trace {
     void evt_port_delete(uint64_t ts, Thread* t, uint32_t id);
     void evt_wait_one(uint64_t ts, Thread* t, uint32_t id, uint32_t signals, uint64_t timeout);
     void evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pending, uint32_t status);
-
+    void evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn);
+    void evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num);
+    void evt_syscall_exit(uint64_t ts, uint32_t cpu, uint32_t num);
     Group* get_groups(void) {
         return group_list;
     }
@@ -203,6 +212,10 @@ struct Trace {
     Track* track_create(void);
     static void track_append(Track* t, uint64_t ts, uint8_t state, uint8_t cpu);
     static Event* track_add_event(Track* t, uint64_t ts, uint32_t tag);
+
+    const char* syscall_name(uint32_t num) {
+        return syscall_names[num];
+    }
 
     void add_object(Object* object);
     void finish(uint64_t ts);

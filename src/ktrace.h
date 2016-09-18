@@ -31,7 +31,7 @@ extern "C" {
 
 #define KTRACE_HDRSIZE            (16)
 #define KTRACE_RECSIZE            (32)
-#define KTRACE_NAMESIZE           (24)
+#define KTRACE_NAMESIZE           (12)
 #define KTRACE_NAMEOFF            (8)
 
 #define KTRACE_VERSION            (0x00020000)
@@ -64,8 +64,6 @@ typedef struct ktrace_rec_32b {
 
 typedef struct ktrace_rec_name {
     uint32_t tag;
-    uint32_t tid;
-    uint64_t ts;
     uint32_t id;
     uint32_t arg;
     char name[1];
