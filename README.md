@@ -23,12 +23,12 @@ make
 
 Grab it from the samples branch:
 ```
-git checkout origin/samples -- mouse.trace
-git rm --cached mouse.trace
+git checkout origin/samples -- boot.trace
+git rm --cached boot.trace
 ```
 
 Run TraceViz:
 ```
-./out/traceviz mouse.trace
+./out/traceviz boot.trace
 ```
 
