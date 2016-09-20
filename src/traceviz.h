@@ -199,6 +199,7 @@ struct Trace {
     void evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pending, uint32_t status);
     void evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn);
     void evt_irq_exit(uint64_t ts, uint32_t cpu, uint32_t irqn);
+    void evt_page_fault(uint64_t ts, uint64_t address, uint32_t flags, uint32_t cpu);
     void evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num);
     void evt_syscall_exit(uint64_t ts, uint32_t cpu, uint32_t num);
     void evt_probe(uint64_t ts, Thread* t, uint32_t evt, uint32_t arg0, uint32_t arg1);

@@ -82,6 +82,9 @@ void EventTooltip(Trace& trace, Event* evt) {
         }
         break;
     }
+    case EVT_PAGE_FAULT:
+        ImGui::SetTooltip("PAGE FAULT 0x%lx 0x%x", ((uint64_t)evt->a << 32) | evt->b, evt->c);
+        break;
     case EVT_SYSCALL_ENTER: {
         const char* name = trace.syscall_name(evt->a);
         if (name) {
@@ -578,6 +581,10 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                         show = show_interrupts;
                         break;
                     case EVT_IRQ_EXIT:
+                        glyph = gDIAMOND;
+                        show = show_interrupts;
+                        break;
+                    case EVT_PAGE_FAULT:
                         glyph = gDIAMOND;
                         show = show_interrupts;
                         break;

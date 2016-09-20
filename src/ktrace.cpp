@@ -415,6 +415,16 @@ void Trace::evt_irq_exit(uint64_t ts, uint32_t cpu, uint32_t irqn) {
     }
 }
 
+void Trace::evt_page_fault(uint64_t ts, uint64_t address, uint32_t flags, uint32_t cpu) {
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_PAGE_FAULT);
+        evt->a = (address >> 32) & 0xffffffff;
+        evt->b = address & 0xffffffff;
+        evt->c = flags;
+    }
+}
+
 void Trace::evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num) {
     if (cpu >= MAXCPU) {
         return;
@@ -555,6 +565,13 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         trace("SYSCALL_RET cpu=%03d n=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
         evt_syscall_exit(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
         return;
+    case EVT_PAGE_FAULT: {
+        tracehdr(ts, 0);
+        uint64_t address = ((uint64_t)rec.x4.a << 32) | rec.x4.b;
+        trace("PAGE_FAULT address %016lx flags %08x cpu=%03d\n", address, rec.x4.c, rec.x4.d);
+        evt_page_fault(ts, address, rec.x4.c, rec.x4.d);
+        return;
+    }
     default:
         // events before 0x100 do not have the common tag/tid/ts header
         // so bail here instead of in the later switch
