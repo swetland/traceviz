@@ -403,6 +403,18 @@ void Trace::evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn) {
     }
 }
 
+void Trace::evt_irq_exit(uint64_t ts, uint32_t cpu, uint32_t irqn) {
+    if (cpu >= MAXCPU) {
+        return;
+    }
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_IRQ_EXIT);
+        evt->a = cpu;
+        evt->b = irqn;
+    }
+}
+
 void Trace::evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num) {
     if (cpu >= MAXCPU) {
         return;
@@ -527,6 +539,11 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         tracehdr(ts, 0);
         trace("IRQ_ENTER   cpu=%03d irqn=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
         evt_irq_enter(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        return;
+    case EVT_IRQ_EXIT:
+        tracehdr(ts, 0);
+        trace("IRQ_EXIT   cpu=%03d irqn=%05d\n", rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
+        evt_irq_exit(ts, rec.hdr.tid & 0xFF, rec.hdr.tid >> 8);
         return;
     case EVT_SYSCALL_ENTER:
         tracehdr(ts, 0);

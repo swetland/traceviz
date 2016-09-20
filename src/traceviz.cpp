@@ -71,12 +71,14 @@ void EventTooltip(Trace& trace, Event* evt) {
         ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u",
                           evtname(evt->tag), evt->a, evt->b);
         break;
-    case EVT_IRQ_ENTER: {
+    case EVT_IRQ_ENTER:
+    case EVT_IRQ_EXIT: {
         const char* name = irqname(evt->b);
+        const char* str = (evt->tag == EVT_IRQ_ENTER) ? "IRQ ENTER" : "IRQ EXIT";
         if (name) {
-            ImGui::SetTooltip("IRQ %d %s", evt->b, name);
+            ImGui::SetTooltip("%s %d %s", str, evt->b, name);
         } else {
-            ImGui::SetTooltip("IRQ %d", evt->b);
+            ImGui::SetTooltip("%s %d", str, evt->b);
         }
         break;
     }
@@ -572,6 +574,10 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                         show = show_syscalls;
                         break;
                     case EVT_IRQ_ENTER:
+                        glyph = gDIAMOND;
+                        show = show_interrupts;
+                        break;
+                    case EVT_IRQ_EXIT:
                         glyph = gDIAMOND;
                         show = show_interrupts;
                         break;
