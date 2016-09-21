@@ -99,6 +99,15 @@ void EventTooltip(Trace& trace, Event* evt) {
         break;
     }
     default:
+        if (evt->tag >= EVT_PROBE) {
+            const char* name = trace.probe_name(evt->tag);
+            if (name) {
+                ImGui::SetTooltip("PROBE %s\n%u\n%u", name, evt->a, evt->b);
+            } else {
+                ImGui::SetTooltip("PROBE %03x\n%u\n%u", evt->tag, evt->a, evt->b);
+            }
+            break;
+        }
         ImGui::SetTooltip("%s", evtname(evt->tag));
         break;
     }
@@ -181,6 +190,7 @@ static bool show_color_editor = false;
 static bool show_metrics_window = false;
 static bool show_syscalls = true;
 static bool show_interrupts = true;
+static bool show_probes = true;
 static bool show_help_window = false;
 static bool show_flow = true;
 static bool show_evts = true;
@@ -247,6 +257,9 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     }
     if (ImGui::IsKeyPressed(KEY(C), false)) {
         show_syscalls = !show_syscalls;
+    }
+    if (ImGui::IsKeyPressed(KEY(P), false)) {
+        show_syscalls = !show_probes;
     }
     if (ImGui::IsKeyPressed(KEY(H), false)) {
         show_help_window = !show_help_window;
@@ -528,8 +541,9 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
 
                 }
-                if (show_evts || show_syscalls || show_interrupts) {
+                if (show_evts || show_syscalls || show_interrupts || show_probes) {
                     bool show = show_evts;
+                    uint32_t col = ImColor(0, 0, 220);
                     const ImFont::Glyph* glyph;
                     switch (e->tag) {
                     case EVT_PORT_WAIT:
@@ -562,6 +576,12 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                         show = show_interrupts;
                         break;
                     default:
+                        if (e->tag >= EVT_PROBE) {
+                            show = show_probes;
+                            glyph = gDIAMOND;
+                            col = ImColor(255,255,0);
+                            break;
+                        }
                         glyph = gDIAMOND;
                         break;
                     }
@@ -572,7 +592,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                             tt_dist = d;
                             tt_evt = &(*e);
                         }
-                        symbols->RenderGlyph(dl, gpos, ImColor(0, 0, 220), glyph);
+                        symbols->RenderGlyph(dl, gpos, col, glyph);
                     }
                 }
                 last_x = x;
@@ -581,7 +601,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         }
     }
 
-    if (show_evts && (sqrtf(tt_dist) < 12.0)) {
+    if (sqrtf(tt_dist) < 12.0) {
         EventTooltip(trace, tt_evt);
     }
 
@@ -718,6 +738,7 @@ int traceviz_render(void) {
         ImGui::Text("F - Toggle Show IPC Flow");
         ImGui::Text("I - Toggle Show Interrupts");
         ImGui::Text("C - Toggle Show Syscalls");
+        ImGui::Text("P - Toggle Show Probes");
         ImGui::Text("H - Toggle Show Help");
         ImGui::Text("0 - Go To Origin");
         ImGui::Text("M - Go To Mark");

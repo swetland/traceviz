@@ -19,6 +19,8 @@ enum {
 #include "ktrace-def.h"
 };
 
+#define EVT_PROBE 0x800
+
 namespace tv {
 
 // these need to match the Magenta Kernel
@@ -149,6 +151,7 @@ typedef union ktrace_record ktrace_record_t;
 struct Trace {
     std::vector<Track*> tracks;
     std::map<uint32_t,const char*> syscall_names;
+    std::map<uint32_t,const char*> probe_names;
     Group* group_list;
     Group* group_last;
 
@@ -171,6 +174,7 @@ struct Trace {
     void import_event(ktrace_record_t& rec, uint32_t evt);
 
     void evt_syscall_name(uint32_t num, const char* name);
+    void evt_probe_name(uint32_t num, const char* name);
     void evt_process_name(uint32_t pid, const char* name, uint32_t index);
     void evt_thread_name(uint32_t tid, uint32_t pid, const char* name);
     void evt_kthread_name(uint32_t tid, const char* name);
@@ -196,6 +200,7 @@ struct Trace {
     void evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn);
     void evt_syscall_enter(uint64_t ts, uint32_t cpu, uint32_t num);
     void evt_syscall_exit(uint64_t ts, uint32_t cpu, uint32_t num);
+    void evt_probe(uint64_t ts, Thread* t, uint32_t evt, uint32_t arg0, uint32_t arg1);
     Group* get_groups(void) {
         return group_list;
     }
@@ -215,6 +220,9 @@ struct Trace {
 
     const char* syscall_name(uint32_t num) {
         return syscall_names[num];
+    }
+    const char* probe_name(uint32_t evt) {
+        return probe_names[evt];
     }
 
     void add_object(Object* object);

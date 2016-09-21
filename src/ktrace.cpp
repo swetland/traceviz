@@ -260,6 +260,10 @@ void Trace::evt_syscall_name(uint32_t num, const char* name) {
     syscall_names[num] = strdup(name);
 }
 
+void Trace::evt_probe_name(uint32_t num, const char* name) {
+    probe_names[num + EVT_PROBE] = strdup(name);
+}
+
 void Trace::evt_process_create(uint64_t ts, Thread* t, uint32_t pid) {
     Process* p = find_process(pid);
     if (p->flags & OBJ_RESOLVED) {
@@ -421,6 +425,12 @@ void Trace::evt_syscall_exit(uint64_t ts, uint32_t cpu, uint32_t num) {
     }
 }
 
+void Trace::evt_probe(uint64_t ts, Thread* t, uint32_t evt, uint32_t arg0, uint32_t arg1) {
+    Event* e = track_add_event(t->track, ts, evt);
+    e->a = arg0;
+    e->b = arg1;
+}
+
 typedef struct {
     uint64_t ts_first;
     uint64_t ts_last;
@@ -507,6 +517,11 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         tracehdr(0, 0);
         trace("SYSCALLNAME id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_syscall_name(rec.name.id, recname(rec.name));
+        return;
+    case EVT_PROBE_NAME:
+        tracehdr(0, 0);
+        trace("PROBE_NAME id=%08x '%s'\n", rec.name.id, recname(rec.name));
+        evt_probe_name(rec.name.id, recname(rec.name));
         return;
     case EVT_IRQ_ENTER:
         tracehdr(ts, 0);
@@ -626,6 +641,15 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         evt_wait_one_done(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
     default:
+        if (evt >= EVT_PROBE) {
+            if (KTRACE_LEN(rec.hdr.tag) == 16) {
+                evt_probe(ts, t, evt, 0, 0);
+                break;
+            } else if (KTRACE_LEN(rec.hdr.tag) == 24) {
+                evt_probe(ts, t, evt, rec.x4.a, rec.x4.b);
+                break;
+            }
+        }
         trace("UNKNOWN_EVT id=%08x tag=%08x evt=%03x\n", rec.hdr.tid, rec.hdr.tag, evt);
         break;
     }
