@@ -264,7 +264,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         show_syscalls = !show_syscalls;
     }
     if (ImGui::IsKeyPressed(KEY(P), false)) {
-        show_syscalls = !show_probes;
+        show_probes= !show_probes;
     }
     if (ImGui::IsKeyPressed(KEY(H), false)) {
         show_help_window = !show_help_window;
