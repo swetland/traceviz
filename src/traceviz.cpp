@@ -514,41 +514,14 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             continue;
         }
         for (Track* t = g->first; t != NULL; t = t->next) {
-            auto e = t->event.begin();
             auto end = t->event.end();
-
-            e = std::lower_bound(e, end, tsedge);
+            auto start = std::lower_bound(t->event.begin(), end, tsedge);
             int64_t tsend = tsedge + ((int64_t)size.x) * tscale;
-            int64_t last_x = 0xFFFFFFFFFFFFFFFFUL;
 
-            for (; (e != end) && (e->ts < tsend); e++) {
-                int64_t x = e->ts;
-                // convert to local coords
-                x = (x - tsedge) / tscale;
-                if (x < last_x) {
-                    continue;
-                }
-
-                if (show_flow && (e->tag == EVT_MSGPIPE_READ) && (e->eventidx)) {
-                    Track* wrtrack = trace.get_track(e->trackidx);
-                    auto wrevent = wrtrack->event[e->eventidx];
-                    auto wrpos = ImVec2((wrevent.ts - tsedge) / (float)tscale, wrtrack->y);
-
-                    auto p0 = wrpos + ImVec2(pos.x + 8.0, 0);
-                    auto p1 = pos + ImVec2(x + 8.0, 0);
-                    if (p0.y < p1.y) {
-                        p0 += ImVec2(0, 16);
-                    } else {
-                        p1 += ImVec2(0, 16);
-                    }
-
-                    float n = (p1.x - p0.x) / 2.0;
-                    dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
-
-                }
-                if (show_evts || show_syscalls || show_interrupts || show_probes) {
+            // Draw system events first.
+            if (show_evts || show_interrupts || show_syscalls) {
+                for (auto e = start; (e != end) && (e->ts < tsend); ++e) {
                     bool show = show_evts;
-                    uint32_t col = ImColor(0, 0, 220);
                     const ImFont::Glyph* glyph;
                     switch (e->tag) {
                     case EVT_PORT_WAIT:
@@ -589,26 +562,56 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                         show = show_interrupts;
                         break;
                     default:
-                        if (e->tag >= EVT_PROBE) {
-                            show = show_probes;
-                            glyph = gDIAMOND;
-                            col = ImColor(255,255,0);
-                            break;
-                        }
-                        glyph = gDIAMOND;
+                        show = false;
                         break;
                     }
-                    if (show) {
-                        auto gpos = pos + ImVec2(x, -1.0);
-                        float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
-                        if (d < tt_dist) {
-                            tt_dist = d;
-                            tt_evt = &(*e);
-                        }
-                        symbols->RenderGlyph(dl, gpos, col, glyph);
+                    if (!show) continue;
+
+                    auto gpos = pos + ImVec2((e->ts - tsedge) / (float)tscale, -1.0);
+                    float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
+                    if (d < tt_dist) {
+                        tt_dist = d;
+                        tt_evt = &(*e);
                     }
+                    symbols->RenderGlyph(dl, gpos, ImColor(0, 0, 220), glyph);
                 }
-                last_x = x;
+            }
+
+            // Draw probes on top so they are more visible.
+            if (show_probes) {
+                for (auto e = start; (e != end) && (e->ts < tsend); ++e) {
+                    if (e->tag < EVT_PROBE) continue;
+
+                    auto gpos = pos + ImVec2((e->ts - tsedge) / (float)tscale, -1.0);
+                    float d = distish(gpos + ImVec2(8.0, 8.0), mouse);
+                    if (d < tt_dist) {
+                        tt_dist = d;
+                        tt_evt = &(*e);
+                    }
+                    symbols->RenderGlyph(dl, gpos, ImColor(255, 255, 0), gDIAMOND);
+                }
+            }
+
+            // Draw flow events last since they cover other things.
+            if (show_flow) {
+                for (auto e = start; (e != end) && (e->ts < tsend); ++e) {
+                    if (e->tag != EVT_MSGPIPE_READ || !e->eventidx) continue;
+
+                    Track* wrtrack = trace.get_track(e->trackidx);
+                    auto wrevent = wrtrack->event[e->eventidx];
+                    auto wrpos = ImVec2((wrevent.ts - tsedge) / (float)tscale, wrtrack->y);
+
+                    auto p0 = wrpos + ImVec2(pos.x + 8.0, 0);
+                    auto p1 = pos + ImVec2((e->ts - tsedge) / (float)tscale + 8.0, 0);
+                    if (p0.y < p1.y) {
+                        p0 += ImVec2(0, 16);
+                    } else {
+                        p1 += ImVec2(0, 16);
+                    }
+
+                    float n = (p1.x - p0.x) / 2.0;
+                    dl->AddBezierCurve(p0, p0 + ImVec2(n,0), p1 + ImVec2(-n,0), p1, fg, 2.0);
+                }
             }
             pos += ImVec2(0, H_TRACE);
         }
