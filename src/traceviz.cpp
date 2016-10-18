@@ -183,6 +183,12 @@ static inline float distish(const ImVec2& a, const ImVec2& b) {
     return dx * dx + dy * dy;
 }
 
+static ImColor colorify(uint32_t tag) {
+    uint32_t bits = tag * 157;
+    bits ^= bits >> 8;
+    return ImColor::HSV((bits & 255) / 256.0, 0.7, 1.0);
+}
+
 void DrawRightTriangle(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 col) {
     dl->AddTriangleFilled(pos, pos + ImVec2(size.x, size.y/2.0), pos + ImVec2(0, size.y), col);
 }
@@ -588,7 +594,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                         tt_dist = d;
                         tt_evt = &(*e);
                     }
-                    symbols->RenderGlyph(dl, gpos, ImColor(255, 255, 0), gDIAMOND);
+                    symbols->RenderGlyph(dl, gpos, colorify(e->tag), gDIAMOND);
                 }
             }
 
