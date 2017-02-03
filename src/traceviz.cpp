@@ -209,6 +209,7 @@ static bool show_evts = true;
 static bool is_marking = false;
 static int64_t mark0_pos;
 static int64_t mark1_pos;
+static bool is_collapsed = false;
 
 void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
     Group* groups = trace.get_groups();
@@ -279,6 +280,11 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         if (!is_marking && (mark0_pos != mark1_pos)) {
             tpos = mark0_pos;
         }
+    }
+    bool do_collapse_change = false;
+    if (ImGui::IsKeyPressed(KEY(Q))) {
+        is_collapsed = !is_collapsed;
+        do_collapse_change = true;
     }
     if (ImGui::IsKeyDown(KEY(A))) {
         tpos -= tscale * 5;
@@ -383,15 +389,22 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
         dl->AddRectFilled(pos + ImVec2(0, H_GROUP - 2), pos + ImVec2(size.x - 1, H_GROUP - 2),
                           ImColor(150,150,150));
         dl->AddText(pos + ImVec2(H_GROUP, 0), fg, g->name, NULL);
-        if (g->flags & GRP_FOLDED) {
-            DrawRightTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
-        } else {
-            DrawDownTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
+
+        if (do_collapse_change) {
+            g->flags &= ~GRP_FOLDED;
+            g->flags |= (is_collapsed) ? GRP_FOLDED : 0;
         }
+
         if (ImGui::IsMouseHoveringRect(pos, pos + ImVec2(W_NAMES, H_GROUP))) {
             if (ImGui::IsMouseClicked(0)) {
                 g->flags ^= GRP_FOLDED;
             }
+        }
+
+        if (g->flags & GRP_FOLDED) {
+            DrawRightTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
+        } else {
+            DrawDownTriangle(dl, pos + ImVec2(5, 4), ImVec2(11, 11), fg);
         }
         if (g->flags & GRP_FOLDED) {
             for (Track* t = g->first; t != NULL; t = t->next) {
@@ -755,6 +768,7 @@ int traceviz_render(void) {
         ImGui::Begin("Help", &show_help_window);
         ImGui::Text("A/D - Pan Left / Pan Right");
         ImGui::Text("W/S - Zoom In / Zoom Out");
+        ImGui::Text("Q - Collapse / Expand all");
         ImGui::Text(" ");
         ImGui::Text("E - Toggle Show Events");
         ImGui::Text("F - Toggle Show IPC Flow");
