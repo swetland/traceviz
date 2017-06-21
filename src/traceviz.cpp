@@ -237,7 +237,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 
     if (ImGui::IsKeyPressed(KEY(0), false)) {
         zoomno = ZOOMDEF;
-        tpos = 0;
+        tpos = TheTrace.first_timestamp;
     }
 
     // tscale: nanoseconds per horizontal pixel
@@ -656,6 +656,8 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
 
 int traceviz_main(int argc, char** argv) {
     TheTrace.import(argc, argv);
+
+    tpos = TheTrace.first_timestamp;
 
     for (unsigned n = 0; n < ImGuiKey_COUNT; n++) {
         keymap[n] = ImGui::GetKeyIndex(n);

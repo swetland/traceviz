@@ -213,7 +213,7 @@ static uint64_t ticks_per_ms;
 uint64_t ticks_to_ts(uint64_t ts) {
     //TODO: handle overflow for large times
     if (ticks_per_ms) {
-        return (ts * 1000000UL) / ticks_per_ms;
+        return (ts * 1000000ULL) / ticks_per_ms;
     } else {
         return 0;
     }
@@ -501,15 +501,18 @@ static inline void tracehdr(uint64_t ts, uint32_t id) {
 void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
     // only valid if the sub-header actually uses this field
     uint64_t ts = ticks_to_ts(rec.hdr.ts);
+    bool ts_valid = true;
 
     switch (evt) {
     case EVT_VERSION:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("VERSION      n=%08x\n", rec.x4.a);
         return;
     case EVT_TICKS_PER_MS:
         ticks_per_ms = ((uint64_t)rec.x4.a) | (((uint64_t)rec.x4.b) << 32);
         tracehdr(0, 0);
+        ts_valid = false;
         trace("TICKS_PER_MS n=%lu\n", ticks_per_ms);
         return;
     case EVT_CONTEXT_SWITCH:
@@ -522,26 +525,31 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         return;
     case EVT_PROC_NAME:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("PROC_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_process_name(rec.name.id, recname(rec.name), 10);
         return;
     case EVT_THREAD_NAME:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("THRD_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_thread_name(rec.name.id, rec.name.arg, recname(rec.name));
         return;
     case EVT_KTHREAD_NAME:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("THRD_NAME   id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_kthread_name(rec.name.id, recname(rec.name));
         return;
     case EVT_SYSCALL_NAME:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("SYSCALLNAME id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_syscall_name(rec.name.id, recname(rec.name));
         return;
     case EVT_PROBE_NAME:
         tracehdr(0, 0);
+        ts_valid = false;
         trace("PROBE_NAME id=%08x '%s'\n", rec.name.id, recname(rec.name));
         evt_probe_name(rec.name.id, recname(rec.name));
         return;
@@ -686,6 +694,11 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         }
         trace("UNKNOWN_EVT id=%08x tag=%08x evt=%03x\n", rec.hdr.tid, rec.hdr.tag, evt);
         break;
+    }
+
+    // save the first time stamp in the system so we can set the starting point
+    if (ts_valid && first_timestamp == 0) {
+        first_timestamp = ts;
     }
 }
 

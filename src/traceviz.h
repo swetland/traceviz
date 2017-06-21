@@ -159,6 +159,8 @@ struct Trace {
 
     Thread* kthread_list;
 
+    uint64_t first_timestamp;
+
     Track* get_track(unsigned n) {
         return tracks[n];
     }
