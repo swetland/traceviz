@@ -57,17 +57,18 @@ const char* irqname(uint32_t irqn) {
     case 0xF0: return "APIC_SPURIOUS";
     case 0xF1: return "APIC_TIMER";
     case 0xF2: return "APIC_ERROR";
-    case 0xF3: return "IPI_GENERIC";
-    case 0xF4: return "IPI_RESCHEDULE";
-    case 0xF5: return "IPI_HALT";
+    case 0xF3: return "PMI";
+    case 0xF4: return "IPI_GENERIC";
+    case 0xF5: return "IPI_RESCHEDULE";
+    case 0xF6: return "IPI_HALT";
     default: return NULL;
     }
 }
 
 void EventTooltip(Trace& trace, Event* evt) {
     switch (evt->tag) {
-    case EVT_MSGPIPE_READ:
-    case EVT_MSGPIPE_WRITE:
+    case EVT_CHANNEL_READ:
+    case EVT_CHANNEL_WRITE:
         ImGui::SetTooltip("%s\nbytes = %u\nhandles = %u",
                           evtname(evt->tag), evt->a, evt->b);
         break;
@@ -84,6 +85,18 @@ void EventTooltip(Trace& trace, Event* evt) {
     }
     case EVT_PAGE_FAULT:
         ImGui::SetTooltip("PAGE FAULT 0x%lx 0x%x", ((uint64_t)evt->a << 32) | evt->b, evt->c);
+        break;
+    case EVT_PAGE_FAULT_EXIT:
+        ImGui::SetTooltip("PAGE FAULT EXIT 0x%lx 0x%x", ((uint64_t)evt->a << 32) | evt->b, evt->c);
+        break;
+    case EVT_KWAIT_BLOCK:
+        ImGui::SetTooltip("KWAIT BLOCK 0x%lx", ((uint64_t)evt->a << 32) | evt->b);
+        break;
+    case EVT_KWAIT_UNBLOCK:
+        ImGui::SetTooltip("KWAIT UNBLOCK 0x%lx 0x%x", ((uint64_t)evt->a << 32) | evt->b, evt->c);
+        break;
+    case EVT_KWAIT_WAKE:
+        ImGui::SetTooltip("KWAIT WAKE 0x%lx is_mutex %d", ((uint64_t)evt->a << 32) | evt->b, evt->c);
         break;
     case EVT_SYSCALL_ENTER: {
         const char* name = trace.syscall_name(evt->a);
@@ -551,13 +564,13 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     case EVT_WAIT_ONE_DONE:
                         glyph = gRIGHT;
                         break;
-                    case EVT_MSGPIPE_CREATE:
+                    case EVT_CHANNEL_CREATE:
                         glyph = gCIRCLE;
                         break;
-                    case EVT_MSGPIPE_WRITE:
+                    case EVT_CHANNEL_WRITE:
                         glyph = gSEND;
                         break;
-                    case EVT_MSGPIPE_READ:
+                    case EVT_CHANNEL_READ:
                         glyph = gRECV;
                         break;
                     case EVT_SYSCALL_ENTER:
@@ -579,6 +592,19 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
                     case EVT_PAGE_FAULT:
                         glyph = gDIAMOND;
                         show = show_interrupts;
+                        break;
+                    case EVT_PAGE_FAULT_EXIT:
+                        glyph = gDIAMOND;
+                        show = show_interrupts;
+                        break;
+                    case EVT_KWAIT_BLOCK:
+                        glyph = gDIAMOND;
+                        break;
+                    case EVT_KWAIT_UNBLOCK:
+                        glyph = gDIAMOND;
+                        break;
+                    case EVT_KWAIT_WAKE:
+                        glyph = gDIAMOND;
                         break;
                     default:
                         show = false;
@@ -614,7 +640,7 @@ void TraceView(tv::Trace &trace, ImVec2 origin, ImVec2 content) {
             // Draw flow events last since they cover other things.
             if (show_flow) {
                 for (auto e = start; (e != end) && (e->ts < tsend); ++e) {
-                    if (e->tag != EVT_MSGPIPE_READ || !e->eventidx) continue;
+                    if (e->tag != EVT_CHANNEL_READ || !e->eventidx) continue;
 
                     Track* wrtrack = trace.get_track(e->trackidx);
                     auto wrevent = wrtrack->event[e->eventidx];

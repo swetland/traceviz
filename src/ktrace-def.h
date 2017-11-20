@@ -23,7 +23,8 @@ KTRACE_DEF(0x031,16B,IRQ_EXIT,IRQ) // (irqn << 8) | cpu
 KTRACE_DEF(0x032,16B,SYSCALL_ENTER,IRQ) // (n << 8) | cpu
 KTRACE_DEF(0x033,16B,SYSCALL_EXIT,IRQ) // (n << 8) | cpu
 
-KTRACE_DEF(0x034,32B,PAGE_FAULT,IRQ) // address_hi, address_lo, flags, cpu
+KTRACE_DEF(0x034,32B,PAGE_FAULT,IRQ) // virtual_address_hi, virtual_address_lo, flags, cpu
+KTRACE_DEF(0x035,32B,PAGE_FAULT_EXIT,IRQ) // virtual_address_hi, virtual_address_lo, flags, cpu
 
 KTRACE_DEF(0x040,32B,CONTEXT_SWITCH,SCHEDULER) // to-tid, (state<<16|cpu), from-kt, to-kt
 
@@ -39,9 +40,9 @@ KTRACE_DEF(0x120,32B,PROC_CREATE,TASKS) // pid
 KTRACE_DEF(0x121,32B,PROC_START,TASKS) // tid, pid
 KTRACE_DEF(0x122,32B,PROC_EXIT,TASKS) // pid
 
-KTRACE_DEF(0x130,32B,MSGPIPE_CREATE,IPC) // id0, id1, flags
-KTRACE_DEF(0x131,32B,MSGPIPE_WRITE,IPC) // id0, bytes, handles
-KTRACE_DEF(0x132,32B,MSGPIPE_READ,IPC) // id1, bytes, handles
+KTRACE_DEF(0x130,32B,CHANNEL_CREATE,IPC) // id0, id1, flags
+KTRACE_DEF(0x131,32B,CHANNEL_WRITE,IPC) // id0, bytes, handles
+KTRACE_DEF(0x132,32B,CHANNEL_READ,IPC) // id1, bytes, handles
 
 KTRACE_DEF(0x140,32B,PORT_WAIT,IPC) // id
 KTRACE_DEF(0x141,32B,PORT_WAIT_DONE,IPC) // id, status
@@ -50,5 +51,25 @@ KTRACE_DEF(0x143,32B,PORT_QUEUE,IPC) // id, size
 
 KTRACE_DEF(0x150,32B,WAIT_ONE,IPC) // id, signals, timeoutlo, timeouthi
 KTRACE_DEF(0x151,32B,WAIT_ONE_DONE,IPC) // id, status, pending
+
+KTRACE_DEF(0x160,32B,KWAIT_BLOCK,SCHEDULER) // queue_hi, queue_hi
+KTRACE_DEF(0x161,32B,KWAIT_WAKE,SCHEDULER) // queue_hi, queue_hi
+KTRACE_DEF(0x162,32B,KWAIT_UNBLOCK,SCHEDULER) // queue_hi, queue_hi, blocked_status
+
+// events from 0x200-0x2ff are for arch-specific needs
+
+#ifdef __x86_64__
+// These are used by Intel Processor Trace support.
+KTRACE_DEF(0x200,32B,IPT_START,ARCH) // MSR_PLATFORM_INFO[15:8], kernel cr3
+KTRACE_DEF(0x201,32B,IPT_CPU_INFO,ARCH) // family, model, stepping
+KTRACE_DEF(0x202,32B,IPT_STOP,ARCH)
+KTRACE_DEF(0x203,32B,IPT_PROCESS_CREATE,ARCH) // pid, cr3
+
+// These are used for Intel Performance Monitor support.
+// The start/stop records currently don't have any data, but may include info for debugging
+// purposes. Let's keep the record size constant - these are infrequently used.
+KTRACE_DEF(0x204,32B,IPM_START,ARCH)
+KTRACE_DEF(0x205,32B,IPM_STOP,ARCH)
+#endif
 
 #undef KTRACE_DEF

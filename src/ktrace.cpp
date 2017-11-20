@@ -333,7 +333,7 @@ void Trace::evt_msgpipe_create(uint64_t ts, Thread* t, uint32_t id, uint32_t oth
     p1->flags |= OBJ_RESOLVED;
     p1->creator = t->id;
     p1->other = p0;
-    track_add_event(t->track, ts, EVT_MSGPIPE_CREATE);
+    track_add_event(t->track, ts, EVT_CHANNEL_CREATE);
 }
 
 void Trace::evt_msgpipe_delete(uint64_t ts, Thread* t, uint32_t id) {
@@ -345,7 +345,7 @@ void Trace::evt_msgpipe_write(uint64_t ts, Thread* t, uint32_t id, uint32_t byte
     m.trackidx = t->track->idx;
     m.eventidx = t->track->event.size();
 
-    Event* evt = track_add_event(t->track, ts, EVT_MSGPIPE_WRITE);
+    Event* evt = track_add_event(t->track, ts, EVT_CHANNEL_WRITE);
     evt->a = bytes;
     evt->b = handles;
 
@@ -359,7 +359,7 @@ void Trace::evt_msgpipe_write(uint64_t ts, Thread* t, uint32_t id, uint32_t byte
 
 void Trace::evt_msgpipe_read(uint64_t ts, Thread* t, uint32_t id, uint32_t bytes, uint32_t handles) {
     MsgPipe* pipe = find_msgpipe(id);
-    Event* evt = track_add_event(t->track, ts, EVT_MSGPIPE_READ);
+    Event* evt = track_add_event(t->track, ts, EVT_CHANNEL_READ);
     evt->a = bytes;
     evt->b = handles;
 
@@ -391,6 +391,26 @@ void Trace::evt_wait_one_done(uint64_t ts, Thread* t, uint32_t id, uint32_t pend
     track_add_event(t->track, ts, EVT_WAIT_ONE_DONE);
 }
 
+void Trace::evt_kwait_block(uint64_t ts, Thread* t, uint64_t wait_queue) {
+    Event* e = track_add_event(t->track, ts, EVT_KWAIT_BLOCK);
+    e->a = (wait_queue >> 32);
+    e->b = wait_queue;
+}
+
+void Trace::evt_kwait_wake(uint64_t ts, Thread* t, uint64_t wait_queue, bool is_mutex) {
+    Event* e = track_add_event(t->track, ts, EVT_KWAIT_WAKE);
+    e->a = (wait_queue >> 32);
+    e->b = wait_queue;
+    e->c = is_mutex ? 1 : 0;
+}
+
+void Trace::evt_kwait_unblock(uint64_t ts, Thread* t, uint64_t wait_queue, uint32_t status) {
+    Event* e = track_add_event(t->track, ts, EVT_KWAIT_UNBLOCK);
+    e->a = (wait_queue >> 32);
+    e->b = wait_queue;
+    e->c = status;
+}
+
 void Trace::evt_irq_enter(uint64_t ts, uint32_t cpu, uint32_t irqn) {
     if (cpu >= MAXCPU) {
         return;
@@ -419,6 +439,16 @@ void Trace::evt_page_fault(uint64_t ts, uint64_t address, uint32_t flags, uint32
     Thread* t = active[cpu];
     if (t != nullptr) {
         Event* evt = track_add_event(t->track, ts, EVT_PAGE_FAULT);
+        evt->a = (address >> 32) & 0xffffffff;
+        evt->b = address & 0xffffffff;
+        evt->c = flags;
+    }
+}
+
+void Trace::evt_page_fault_exit(uint64_t ts, uint64_t address, uint32_t flags, uint32_t cpu) {
+    Thread* t = active[cpu];
+    if (t != nullptr) {
+        Event* evt = track_add_event(t->track, ts, EVT_PAGE_FAULT_EXIT);
         evt->a = (address >> 32) & 0xffffffff;
         evt->b = address & 0xffffffff;
         evt->c = flags;
@@ -580,6 +610,13 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         evt_page_fault(ts, address, rec.x4.c, rec.x4.d);
         return;
     }
+    case EVT_PAGE_FAULT_EXIT: {
+        tracehdr(ts, 0);
+        uint64_t address = ((uint64_t)rec.x4.a << 32) | rec.x4.b;
+        trace("PAGE_FAULT_EXIT address %016lx flags %08x cpu=%03d\n", address, rec.x4.c, rec.x4.d);
+        evt_page_fault_exit(ts, address, rec.x4.c, rec.x4.d);
+        return;
+    }
     default:
         // events before 0x100 do not have the common tag/tid/ts header
         // so bail here instead of in the later switch
@@ -642,19 +679,19 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         trace("THRD_START  id=%08x\n", rec.x4.a);
         evt_thread_start(ts, t, rec.x4.a);
         break;
-    case EVT_MSGPIPE_CREATE:
+    case EVT_CHANNEL_CREATE:
         s.msgpipe_new += 2;
-        trace("MPIP_CREATE id=%08x other=%08x flags=%x\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        trace("CHAN id=%08x other=%08x flags=%x\n", rec.x4.a, rec.x4.b, rec.x4.c);
         evt_msgpipe_create(ts, t, rec.x4.a, rec.x4.b);
         break;
-    case EVT_MSGPIPE_WRITE:
+    case EVT_CHANNEL_WRITE:
         s.msgpipe_write++;
-        trace("MPIP_WRITE  id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        trace("CHAN_WRITE  id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
         evt_msgpipe_write(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
-    case EVT_MSGPIPE_READ:
+    case EVT_CHANNEL_READ:
         s.msgpipe_read++;
-        trace("MPIP_READ   id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
+        trace("CHAN_READ   id=%08x bytes=%d handles=%d\n", rec.x4.a, rec.x4.b, rec.x4.c);
         evt_msgpipe_read(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
     case EVT_PORT_CREATE:
@@ -682,6 +719,27 @@ void Trace::import_event(ktrace_record_t& rec, uint32_t evt) {
         trace("WAIT_DONE   id=%08x pending=%08x result=%08x\n", rec.x4.a, rec.x4.b, rec.x4.c);
         evt_wait_one_done(ts, t, rec.x4.a, rec.x4.b, rec.x4.c);
         break;
+    case EVT_KWAIT_BLOCK: {
+        uint64_t wait_queue = ((uint64_t)rec.x4.a << 32) | ((uint64_t)rec.x4.b);
+
+        trace("KWAIT_BLOCK wait=%016lx\n", wait_queue);
+        evt_kwait_block(ts, t, wait_queue);
+        break;
+    }
+    case EVT_KWAIT_UNBLOCK: {
+        uint64_t wait_queue = ((uint64_t)rec.x4.a << 32) | ((uint64_t)rec.x4.b);
+
+        trace("KWAIT_UNBLOCK wait=%016lx status=%08x\n", wait_queue, rec.x4.c);
+        evt_kwait_unblock(ts, t, wait_queue, rec.x4.c);
+        break;
+    }
+    case EVT_KWAIT_WAKE: {
+        uint64_t wait_queue = ((uint64_t)rec.x4.a << 32) | ((uint64_t)rec.x4.b);
+
+        trace("KWAIT_WAKE wait=%016lx is mutex %d\n", wait_queue, rec.x4.c);
+        evt_kwait_wake(ts, t, wait_queue, rec.x4.c);
+        break;
+    }
     default:
         if (evt >= EVT_PROBE) {
             if (KTRACE_LEN(rec.hdr.tag) == 16) {
